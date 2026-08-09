@@ -261,6 +261,20 @@ body {
   opacity: 0.85;
 }
 
+/* The radial menu answers to the mouse or to the key, never both, so the reference
+   shows one set of bindings at a time. Clicking is the default, hence the plain rule. */
+.radialGesture {
+  display: none;
+}
+
+body.radialGestureMode .radialClick {
+  display: none;
+}
+
+body.radialGestureMode .radialGesture {
+  display: flex;
+}
+
 /* Section heading inside the shortcut reference. */
 .bindGroup {
   margin-top: 10px;

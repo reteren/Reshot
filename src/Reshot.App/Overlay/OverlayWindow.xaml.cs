@@ -2889,6 +2889,7 @@ public partial class OverlayWindow : Window
             SelectionOutline.Visibility = Visibility.Collapsed;
             HideToolbar();
             PositionHandles(default, show: false);
+            SizeBadge.Visibility = Visibility.Collapsed;
             return;
         }
         PolygonPreview.Visibility = Visibility.Collapsed;
@@ -2912,6 +2913,10 @@ public partial class OverlayWindow : Window
             var showHandles = _selection is { } && _dragMode != DragMode.NewSelection;
             PositionHandles(anchor.Bounds, showHandles);
 
+            // Unlike the toolbar, the badge stays up while dragging: sizing the
+            // selection is exactly when the number is worth reading.
+            PositionSizeBadge(anchor.Bounds);
+
             if (_dragMode != DragMode.None)
                 HideToolbar();
             else
@@ -2923,6 +2928,7 @@ public partial class OverlayWindow : Window
             SelectionOutline.Visibility = Visibility.Collapsed;
             HideToolbar();
             PositionHandles(default, show: false);
+            SizeBadge.Visibility = Visibility.Collapsed;
         }
 
         // Re-clip existing strokes when the selection changes.
@@ -2959,6 +2965,39 @@ public partial class OverlayWindow : Window
             Canvas.SetTop(shape, c.Y - HandleSize / 2);
             shape.Visibility = Visibility.Visible;
         }
+    }
+
+    /// <summary>
+    /// Shows what the selection will export as, in physical pixels, just outside its
+    /// top-left corner; with no room above (the selection reaches the top of the
+    /// screen) it tucks inside instead, the same way the toolbar does at the bottom.
+    /// The offsets clear the corner handle, which is drawn centred on that corner.
+    /// </summary>
+    private void PositionSizeBadge(Rect sel)
+    {
+        // The reading has to be the exported size, not the DIP box: on a scaled
+        // display those differ, and the number is only useful if it matches the file.
+        var px = BoundsToPixels(sel);
+        SizeBadgeText.Text = $"{px.Width} × {px.Height}";
+
+        SizeBadge.Visibility = Visibility.Visible;
+        SizeBadge.UpdateLayout(); // the text just changed, so the width has too
+
+        const double gap = 6;
+        var bw = SizeBadge.ActualWidth;
+        var bh = SizeBadge.ActualHeight;
+
+        var x = sel.Left;
+        var y = sel.Top - bh - gap;
+
+        if (y < 0)
+        {
+            x = sel.Left + gap;
+            y = sel.Top + gap;
+        }
+
+        Canvas.SetLeft(SizeBadge, Math.Clamp(x, 0, Math.Max(0, RootGrid.ActualWidth - bw)));
+        Canvas.SetTop(SizeBadge, Math.Clamp(y, 0, Math.Max(0, RootGrid.ActualHeight - bh)));
     }
 
     /// <summary>

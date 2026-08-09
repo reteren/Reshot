@@ -58,6 +58,22 @@
                 <p class="inputLabel hint">Click a field, then press a key combination. Print Screen (PrtScn / Prnt) is supported.</p>
                 <button class="button compact" id="clearAudioHotkey">Clear</button>
               </div>
+
+              <hr />
+              <p>Radial menu:</p>
+
+              <label class="checkboxWrapper">
+                <input type="checkbox" id="radialGesture" />
+                <span class="checkmark"></span>
+                <span>Choose by releasing the key</span>
+              </label>
+              <p class="inputLabel hint">
+                Holding the capture hotkey opens the quick menu. Normally the wheel stays up
+                after you let go and waits for a left click; the centre, or anywhere outside
+                the wheel, cancels. With this on the menu lives only while the key is held:
+                point at a slice and release to run it, and a flick past the rim counts as
+                pointing that way.
+              </p>
             </div>
 
             <div class="column">
@@ -297,9 +313,11 @@
                 <div class="bind"><kbd class="infoAudioHotkey">not set</kbd><span class="what">Optional second hotkey: start / stop the audio recorder</span></div>
 
                 <p class="bindGroup">Radial menu (hold the main hotkey)</p>
-                <div class="bind"><kbd class="infoHotkeyAlias">PrtScn</kbd><span class="what">Point at a slice and release: quick screen recording, quick audio, or settings</span></div>
-                <div class="bind"><kbd class="infoHotkeyAlias">PrtScn</kbd><span class="what">Release with the cursor still in the middle: cancel</span></div>
-                <div class="bind"><kbd>Esc</kbd><kbd>RMB</kbd><span class="what">Cancel. The centre ✕ and clicking a slice work too</span></div>
+                <div class="bind radialClick"><kbd>LMB</kbd><span class="what">The wheel stays up after you let go: click a slice for quick screen recording, quick audio, or settings</span></div>
+                <div class="bind radialClick"><kbd>LMB</kbd><span class="what">Click the centre, or anywhere outside the wheel: cancel</span></div>
+                <div class="bind radialGesture"><kbd class="infoHotkeyAlias">PrtScn</kbd><span class="what">Point at a slice and release: quick screen recording, quick audio, or settings</span></div>
+                <div class="bind radialGesture"><kbd class="infoHotkeyAlias">PrtScn</kbd><span class="what">Release with the cursor still in the middle: cancel</span></div>
+                <div class="bind"><kbd>Esc</kbd><kbd>RMB</kbd><span class="what">Cancel, either way round</span></div>
 
                 <p class="bindGroup">Tools, in toolbar order</p>
                 <div class="bind"><kbd>1</kbd><span class="what">Selection</span></div>

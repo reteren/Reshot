@@ -24,10 +24,16 @@ public enum RadialChoice { Record, Audio, Settings }
 /// The hold-to-open radial menu: three HL2-styled pie slices (quick record, quick audio,
 /// settings) around a central cancel hub, drawn at the cursor.
 ///
-/// It is a <b>gesture</b> menu, not a click menu: the wheel lives only while the hotkey is
-/// held, the hovered slice follows the raw cursor position (so a flick past the outer rim
-/// still selects that direction), and releasing the key commits whatever is hovered. The
-/// cursor resting on the central hub means "cancel", which is where it starts.
+/// By default (<c>radial.clickToChoose</c>) it is a <b>click</b> menu: the wheel outlives
+/// the keypress, and a left click commits the slice under the cursor. The central hub means
+/// "cancel", which is where the cursor starts, and so does everything past the outer rim.
+///
+/// Turning that key off makes it a <b>gesture</b> menu instead: the wheel lives only while
+/// the hotkey is held and releasing the key commits whatever is hovered. That flips one
+/// rule — hover stops being bounded by the rim, because a flick past it should still count
+/// as pointing that way. The bound is right for a click, where the pointer lands wherever
+/// the user aimed it and a click out on the desktop has to read as "go away" rather than
+/// "start recording", and wrong for a flick.
 ///
 /// The window is only as large as the wheel. A topmost window covering the whole screen
 /// makes the shell treat it as a fullscreen app and hide the taskbar, which is why this one
@@ -63,8 +69,20 @@ public sealed class RadialMenuWindow : Window
     /// <summary>Virtual key of the hotkey being held; 0 = no key tracking (click-only).</summary>
     private readonly uint _hotkeyVk;
 
+    /// <summary>Left mouse button, polled the same way the hotkey is.</summary>
+    private const int VkLButton = 0x01;
+
     private System.Windows.Threading.DispatcherTimer? _poll;
     private SolidColorBrush? _hubCross;
+
+    /// <summary>
+    /// No key to watch means the wheel has to outlive the keypress, so the mouse commits
+    /// instead. The two modes are mutually exclusive by construction.
+    /// </summary>
+    private bool ClickMode => _hotkeyVk == 0;
+
+    /// <summary>Previous left-button state, so a click commits on the press edge only.</summary>
+    private bool _lmbDown;
 
     /// <summary>Wheel centre in physical pixels, the anchor all hover maths is done against.</summary>
     private int _centerX, _centerY;
@@ -92,7 +110,7 @@ public sealed class RadialMenuWindow : Window
 
     /// <param name="hotkeyVk">
     /// Virtual key currently held down. Releasing it commits the hovered slice. Pass 0 to
-    /// disable key tracking, leaving the menu click-driven.
+    /// disable key tracking, leaving the menu click-driven (<c>radial.clickToChoose</c>).
     /// </param>
     public RadialMenuWindow(uint hotkeyVk = 0)
     {
@@ -195,6 +213,11 @@ public sealed class RadialMenuWindow : Window
     /// </summary>
     private void StartPoll()
     {
+        // Seed the button state rather than assuming it is up: the menu can open while a
+        // button is already held, and a stale "was up" would read that as a fresh click
+        // and commit before the user has aimed at anything.
+        _lmbDown = IsLeftButtonDown();
+
         _poll = new System.Windows.Threading.DispatcherTimer
         {
             Interval = TimeSpan.FromMilliseconds(PollMs),
@@ -208,11 +231,29 @@ public sealed class RadialMenuWindow : Window
             // the cursor is already pointing rather than on a stale "nothing".
             UpdateHoverFromCursor();
 
-            if (_hotkeyVk != 0 && (NativeMethods.GetAsyncKeyState((int)_hotkeyVk) & 0x8000) == 0)
+            if (ClickMode)
+            {
+                // The click is polled, not taken from WPF mouse events, for the same reason
+                // the cursor is: this window is only as big as the wheel, so a click meant
+                // as "cancel" usually lands on another application entirely and never
+                // reaches us as an event. Over a fullscreen game the window may not even
+                // hold the foreground.
+                var down = IsLeftButtonDown();
+                var pressed = down && !_lmbDown;
+                _lmbDown = down;
+                if (pressed)
+                    CommitHover();
+                return;
+            }
+
+            if ((NativeMethods.GetAsyncKeyState((int)_hotkeyVk) & 0x8000) == 0)
                 CommitHover(); // key released → act on whatever is under the cursor
         };
         _poll.Start();
     }
+
+    private static bool IsLeftButtonDown() =>
+        (NativeMethods.GetAsyncKeyState(VkLButton) & 0x8000) != 0;
 
     private void StopPoll()
     {
@@ -227,8 +268,12 @@ public sealed class RadialMenuWindow : Window
         var dy = (p.Y - _centerY) / _scaleYDpi;
 
         // Inside the hub is the cancel zone, and where the cursor starts. Everything
-        // beyond it is a direction, with no outer limit.
-        int? hit = Math.Sqrt(dx * dx + dy * dy) < InnerR ? null : SliceAt(dx, dy);
+        // beyond it is a direction; in click mode bounded by the rim, so a click aimed
+        // anywhere else on the screen cancels instead of picking the nearest slice, and
+        // in gesture mode with no outer limit, so a flick past the rim still counts.
+        var dist = Math.Sqrt(dx * dx + dy * dy);
+        var outside = dist < InnerR || (ClickMode && dist > OuterR + ExtendPx);
+        int? hit = outside ? null : SliceAt(dx, dy);
         SetHover(hit);
     }
 

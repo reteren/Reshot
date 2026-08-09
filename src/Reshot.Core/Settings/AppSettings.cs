@@ -36,6 +36,20 @@ public sealed class AppSettings
     public VideoSettings Video { get; set; } = new();
     public AudioSettings Audio { get; set; } = new();
     public UpdateSettings Update { get; set; } = new();
+    public RadialSettings Radial { get; set; } = new();
+}
+
+/// <summary>Behaviour of the hold-to-open radial quick menu.</summary>
+public sealed class RadialSettings
+{
+    /// <summary>
+    /// Keep the wheel open after the hotkey is released and pick with a left click,
+    /// instead of committing whatever the cursor points at on release. On by default:
+    /// the gesture is faster once learned, but it has to be known before it can be used,
+    /// and a menu that vanishes when you let go teaches nobody that. The settings window
+    /// offers the gesture as the opt-in, so the checkbox there is this key negated.
+    /// </summary>
+    public bool ClickToChoose { get; set; } = true;
 }
 
 /// <summary>Standalone audio-recording tool settings (remembers the last-used sources).</summary>

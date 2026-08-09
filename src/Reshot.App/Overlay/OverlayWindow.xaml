@@ -338,6 +338,17 @@
                   Stroke="#FF3C9898"
                   StrokeThickness="1.5"
                   StrokeDashArray="4 3" />
+
+            <!-- Exported size in physical pixels, pinned to the selection's top-left. -->
+            <Border x:Name="SizeBadge"
+                    Visibility="Collapsed"
+                    Background="{StaticResource PanelTint}"
+                    CornerRadius="3"
+                    Padding="6,2">
+                <TextBlock x:Name="SizeBadgeText"
+                           Style="{StaticResource PanelLabel}"
+                           Text="0 × 0" />
+            </Border>
         </Canvas>
 
         <!-- Toolbar layer (hit-testable), positioned near the selection. -->

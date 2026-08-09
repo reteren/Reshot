@@ -251,15 +251,19 @@ public partial class App : System.Windows.Application
     }
 
     /// <summary>
-    /// Opens the hold-to-open radial menu at the cursor. <paramref name="vk"/> is the key
-    /// still being held: the menu watches it and commits the hovered slice when it comes up.
+    /// Opens the hold-to-open radial menu at the cursor. Under <c>radial.clickToChoose</c>
+    /// (the default) the held key is withheld from the menu, which is what makes the wheel
+    /// outlive the keypress and wait for a click. With it off, <paramref name="vk"/> is
+    /// handed over instead: the menu watches that key and commits the hovered slice when it
+    /// comes back up.
     /// </summary>
     private void OpenRadialMenu(uint vk)
     {
         if (_radial is not null || _overlay is not null || _recording || _audioRecording)
             return;
 
-        _radial = new Radial.RadialMenuWindow(vk);
+        var clickToChoose = _settingsService?.Current.Radial.ClickToChoose ?? true;
+        _radial = new Radial.RadialMenuWindow(clickToChoose ? 0 : vk);
         _radial.Chosen += choice =>
         {
             switch (choice)

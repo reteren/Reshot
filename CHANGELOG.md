@@ -3,6 +3,21 @@
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and this
 project adheres to [Semantic Versioning](https://semver.org/).
 
+## [1.1.0] - 2026-08-09
+
+### Added
+
+- The selection shows its exported size in pixels above its top-left corner, and keeps
+  showing it while the selection is being dragged or resized. Against the top edge of the
+  screen, where there is no room outside, it sits just inside the frame instead.
+- The radial quick menu now stays open after the hotkey is released and commits on a left
+  click. The wheel gains an outer edge the gesture deliberately lacked — beyond the rim
+  nothing is pointed at, so a click elsewhere on the screen cancels rather than running the
+  nearest slice.
+- "Choose by releasing the key" (Settings → General, `radial.clickToChoose` off) brings the
+  old behaviour back: the wheel lives only while the hotkey is held and commits whatever the
+  cursor points at on release, with no outer edge, so a flick past the rim still counts.
+
 ## [1.0.2] - 2026-08-02
 
 ### Changed

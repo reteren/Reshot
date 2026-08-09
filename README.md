@@ -33,6 +33,7 @@ waiting to fire. Idle, that means under 30 MB of memory and roughly 0% CPU.
   Windows.Graphics.Capture as the fallback
 - Shaped selections: rectangle, ellipse, triangle, lasso, polygon
 - Several selections at once (`Ctrl` + drag)
+- The pixel size of the selection is shown at its top-left corner while you size it
 - Anything outside a non-rectangular shape becomes transparent, clipboard included
 
 **Annotation**
@@ -64,7 +65,8 @@ waiting to fire. Idle, that means under 30 MB of memory and roughly 0% CPU.
 
 **Shell**
 
-- Radial menu on holding the hotkey: point at a slice, release to run it, no clicking
+- Radial menu on holding the hotkey: it stays up after you let go, and a click runs a
+  slice. Optionally a pure gesture instead: point and release the key, no clicking
 - Half-Life 2 / Source VGUI styling
 - Settings, autostart, single instance
 

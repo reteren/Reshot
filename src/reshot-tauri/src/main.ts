@@ -29,6 +29,7 @@ interface Settings {
   };
   audio: { system: boolean; mic: boolean; micDevice: string };
   update: { auto: boolean };
+  radial: { clickToChoose: boolean };
 }
 
 const defaults = (): Settings => ({
@@ -47,6 +48,7 @@ const defaults = (): Settings => ({
   },
   audio: { system: true, mic: false, micDevice: "default" },
   update: { auto: true },
+  radial: { clickToChoose: true },
 });
 
 /** Overlays whatever is on disk onto the defaults, one level at a time. */
@@ -434,6 +436,20 @@ async function load() {
     draft.audioHotkey = "";
     showAudioHotkey("");
     markDirty();
+  });
+
+  // Clicking is the default, so the checkbox offers the gesture and therefore writes the
+  // stored key negated. The key keeps its own name pointing the right way: clickToChoose
+  // true really is click-to-choose, whatever the box next to it happens to say.
+  //
+  // The Info tab lists the radial bindings, and the two modes have different ones, so the
+  // reference follows the checkbox immediately rather than after a save-and-reopen.
+  const showRadialMode = (gesture: boolean) =>
+    document.body.classList.toggle("radialGestureMode", gesture);
+  showRadialMode(!draft.radial.clickToChoose);
+  bindCheckbox("radialGesture", () => !draft.radial.clickToChoose, (v) => {
+    draft.radial.clickToChoose = !v;
+    showRadialMode(v);
   });
 
   // "…as administrator" only means anything while autostart is on, and leaving it checked

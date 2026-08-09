@@ -233,13 +233,19 @@ slices and a cancel hub in the middle:
 | Record audio | Starts the audio recorder with every source |
 | Settings | Opens the settings window |
 
-The wheel is a **gesture, not a dialog**: it lives only while the key is held. Point the
-cursor at a slice and release the key to run it. There is nothing to click, and no outer
-edge to stay inside, a flick past the rim still counts as pointing that way. The cursor
-starts in the central hub, which means cancel, so releasing without moving does nothing.
+By default the wheel **outlives the keypress** (`radial.clickToChoose`): let the hotkey go
+and it stays up, waiting for a left click on a slice. The cursor starts in the central hub,
+which means cancel, and so does everything past the outer rim — a click out on the desktop
+is "go away", not "run the nearest slice".
 
-Cancelling: release the key with the cursor still in the hub, the centre cross, `Esc`, or a
-right-click. Clicking a slice also works, for anyone who reaches for the mouse.
+Turning `radial.clickToChoose` off makes it a **gesture instead of a dialog**: the wheel
+lives only while the key is held, and releasing it runs whatever the cursor points at.
+There is then nothing to click and no outer edge to stay inside, a flick past the rim still
+counts as pointing that way. Releasing without moving does nothing, because the cursor
+starts in the hub. This is the faster way round once known, which is exactly why it is not
+the default: a menu that disappears when you let go never gets the chance to teach itself.
+
+Cancelling, in either mode: the centre hub, `Esc`, or a right-click.
 
 The wheel is placed at the cursor but kept inside the work area, so it never runs off the
 edge of the screen and never covers the taskbar.
@@ -250,7 +256,8 @@ edge of the screen and never covers the taskbar.
 |---|---|---|
 | Hotkey, tap | global | Start a capture session |
 | Hotkey, hold | global | Open the radial menu |
-| Hotkey, release | radial menu | Run the slice the cursor points at; the hub cancels |
+| Left button | radial menu | Run the slice clicked; the hub and everything past the rim cancel |
+| Hotkey, release | radial menu, `radial.clickToChoose` off | Run the slice the cursor points at; the hub cancels |
 | Hotkey | while recording | Stop the recording |
 | `Ctrl+A` | session | Select the primary monitor, again for all monitors |
 | `Ctrl` + drag | selection | Add another selection |
@@ -294,6 +301,7 @@ Stored as JSON in `%AppData%\reshot\settings.json`.
 | `video.corners.color` | `#3C9898` | Bracket colour |
 | `video.corners.opacity` | `0.7` | Bracket opacity |
 | `update.auto` | `true` | Automatic updates. **Not implemented yet** |
+| `radial.clickToChoose` | `true` | Keep the radial menu open after the hotkey is released and pick with a left click. Off = the menu is a gesture that ends with the keypress. The settings window offers this inverted, as "Choose by releasing the key" |
 
 The interface is English only, with a fixed dark theme.
 
