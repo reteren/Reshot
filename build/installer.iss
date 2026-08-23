@@ -70,6 +70,7 @@ Name: "english"; MessagesFile: "compiler:Default.isl"
 [Tasks]
 Name: "desktopicon"; Description: "{cm:CreateDesktopIcon}"; GroupDescription: "{cm:AdditionalIcons}"; Flags: unchecked
 Name: "autostart"; Description: "Start Reshot when Windows starts"; GroupDescription: "Startup:"
+Name: "freeprintscreen"; Description: "Let Reshot use the Print Screen key (turns off the Windows snipping shortcut)"; GroupDescription: "Print Screen key:"
 
 [Files]
 ; Keep this explicit so the GPL binary is installed beside reshot.exe and tracked for uninstall.
@@ -86,6 +87,17 @@ Name: "{autodesktop}\{#AppName}"; Filename: "{app}\{#AppExe}"; Tasks: desktopico
 ; checkbox above. uninsdeletevalue keeps an uninstall from leaving a dead autostart.
 Root: HKCU; Subkey: "Software\Microsoft\Windows\CurrentVersion\Run"; ValueType: string; \
     ValueName: "reshot"; ValueData: """{app}\{#AppExe}"""; Flags: uninsdeletevalue; Tasks: autostart
+
+; Windows 11 binds Print Screen to the snipping overlay, and that binding is ahead of the
+; hotkey Reshot registers, so on a default install the app looks dead on its own default
+; hotkey. This is the per-user switch behind Settings > Accessibility > Keyboard > "Use the
+; Print screen key to open screen capture"; zero hands the key back to ordinary hotkeys.
+; Behind a ticked-by-default task rather than done silently: it is a Windows setting, and
+; changing one without saying so is what unwelcome software does. uninsdeletevalue puts the
+; Windows default back when Reshot is uninstalled.
+Root: HKCU; Subkey: "Control Panel\Keyboard"; ValueType: dword; \
+    ValueName: "PrintScreenKeyForSnippingEnabled"; ValueData: 0; \
+    Flags: uninsdeletevalue; Tasks: freeprintscreen
 
 [Run]
 Filename: "{app}\{#AppExe}"; Description: "{cm:LaunchProgram,{#AppName}}"; Flags: nowait postinstall skipifsilent

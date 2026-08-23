@@ -3,6 +3,34 @@
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and this
 project adheres to [Semantic Versioning](https://semver.org/).
 
+## [Unreleased]
+
+### Added
+
+- The installer offers to free the Print Screen key from the Windows snipping overlay,
+  ticked by default. Windows 11 binds that key ahead of any hotkey an application
+  registers, so on a default install Reshot's own default hotkey did nothing and the app
+  looked broken on first run. The task clears
+  `HKCU\Control Panel\Keyboard\PrintScreenKeyForSnippingEnabled`, which is the same switch
+  as Settings → Accessibility → Keyboard, and uninstalling puts the Windows default back.
+  It is a task rather than a silent write, because changing a Windows setting without
+  saying so is not something an installer should do.
+
+### Changed
+
+- The capture overlay is no longer hidden from other applications. Screen sharing Reshot
+  used to show the other side a live desktop while you selected and drew on a frozen one,
+  because the overlay was excluded from every capture API for the whole session. The
+  exclusion now lasts only from the instant a recording starts until the overlay closes,
+  which is the one moment it was ever needed — so Reshot's own recordings still never
+  contain the overlay, and everyone watching a call sees the selection and the annotations.
+- The old behaviour is available as **Settings → Overlay → Hide the overlay from other
+  applications** (`overlay.hideFromCapture`, off by default).
+
+The recording HUD — the corner brackets and the REC indicator — stays excluded either way.
+It is on screen for the whole recording rather than for a moment, so showing it to other
+applications would also burn it into your own MP4.
+
 ## [1.1.0] - 2026-08-09
 
 ### Added

@@ -18,6 +18,7 @@ public sealed class AppSettings
     public string AudioHotkey { get; set; } = string.Empty;
 
     public DimSettings Dim { get; set; } = new();
+    public OverlaySettings Overlay { get; set; } = new();
     public PathSettings Paths { get; set; } = new();
 
     /// <summary>Start Reshot with Windows.</summary>
@@ -63,6 +64,23 @@ public sealed class AudioSettings
 
     /// <summary>Microphone device id, or "default". Shared with the video recorder.</summary>
     public string MicDevice { get; set; } = "default";
+}
+
+/// <summary>Overlay behaviour that is not about what it draws.</summary>
+public sealed class OverlaySettings
+{
+    /// <summary>
+    /// Hide the capture overlay from every screen-capture API
+    /// (<c>WDA_EXCLUDEFROMCAPTURE</c>): it stays on the physical display, but a screen
+    /// share, a call or another recorder sees the live desktop instead of the frozen
+    /// frame, the selection and the annotations.
+    ///
+    /// Off by default, because the common case is the opposite one: someone screen
+    /// sharing wants the other side to see what is being pointed at. Reshot's own
+    /// recordings are unaffected either way — the overlay leaves the captured frames
+    /// just before the recording stream opens, regardless of this setting.
+    /// </summary>
+    public bool HideFromCapture { get; set; } = false;
 }
 
 /// <summary>Dimming of the non-selected area of the overlay.</summary>

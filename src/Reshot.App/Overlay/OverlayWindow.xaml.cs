@@ -179,11 +179,14 @@ public partial class OverlayWindow : Window
     private Point _polygonCursor;
     private const double PolygonCloseThreshold = 12;
 
-    // Keep this window off every screen-capture API (WGC included). Visible on the
+    // Takes this window off every screen-capture API (WGC included). Visible on the
     // physical display; absent from captured frames. Win10 2004+ / build 19041.
     private const uint WdaExcludeFromCapture = 0x00000011;
 
     [DllImport("user32.dll")] private static extern bool SetWindowDisplayAffinity(IntPtr hwnd, uint affinity);
+
+    /// <summary>Set once the exclusion is in place, so applying it twice costs nothing.</summary>
+    private bool _excludedFromCapture;
 
     private const double HandleSize = 9;
     private readonly Dictionary<Handle, Rectangle> _handleShapes = new();
@@ -255,10 +258,34 @@ public partial class OverlayWindow : Window
             _frame.VirtualLeft, _frame.VirtualTop, _frame.Width, _frame.Height,
             NativeMethods.SWP_SHOWWINDOW);
 
-        // This overlay is a fullscreen topmost window, and the recording stream starts
-        // before it closes, so without exclusion the frozen frame, selection outline and
-        // toolbar end up burned into the first frames of the MP4.
-        if (!SetWindowDisplayAffinity(hwnd, WdaExcludeFromCapture))
+        // Whether anyone else's capture may see this window is the user's call: while
+        // screen sharing, the usual reason to open Reshot is to show what is being pointed
+        // at. Reshot's own recordings are protected on their own path, in RequestRecording.
+        if (_settings.Overlay.HideFromCapture)
+            ExcludeFromCapture();
+    }
+
+    /// <summary>
+    /// Takes this window out of every screen-capture API — Reshot's own recording, a
+    /// screen share, anyone else's recorder — while leaving it on the physical display.
+    ///
+    /// Applied at startup only when the user asked the overlay to stay private, and always
+    /// immediately before a recording stream opens: this window is fullscreen, topmost and
+    /// still up while <c>StartRecording</c> runs, so the frozen frame, the selection
+    /// outline and the toolbar would otherwise be burned into the first frames of the MP4.
+    /// </summary>
+    private void ExcludeFromCapture()
+    {
+        if (_excludedFromCapture)
+            return;
+
+        var hwnd = new WindowInteropHelper(this).Handle;
+        if (hwnd == IntPtr.Zero)
+            return;
+
+        if (SetWindowDisplayAffinity(hwnd, WdaExcludeFromCapture))
+            _excludedFromCapture = true;
+        else
             Log.Warn("Overlay: SetWindowDisplayAffinity(WDA_EXCLUDEFROMCAPTURE) failed; the overlay may appear in the recording.");
     }
 
@@ -3303,6 +3330,14 @@ public partial class OverlayWindow : Window
         var mask = BuildRecordingMask(selections, rects, union);
         var screenRect = new Int32Rect(
             _frame.VirtualLeft + union.X, _frame.VirtualTop + union.Y, union.Width, union.Height);
+        // StartRecording runs synchronously inside this call and opens the capture stream
+        // while this window is still alive, so the overlay has to be gone from the frames
+        // before it does. Excluding it covers the capture APIs; hiding it covers the gap
+        // between asking for the exclusion and the compositor acting on it. Close() stays
+        // below the event, where the App still reads this session as handing off.
+        ExcludeFromCapture();
+        Hide();
+
         RecordRequested?.Invoke(screenRect, mask, sources);
         Close();
     }

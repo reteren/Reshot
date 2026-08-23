@@ -19,6 +19,7 @@ interface Settings {
   autostart: boolean;
   autostartElevated: boolean;
   dim: { opacity: number; color: string };
+  overlay: { hideFromCapture: boolean };
   paths: { screenshots: string; videos: string; records: string };
   format: { image: string; quality: number };
   filename: { template: string };
@@ -38,6 +39,7 @@ const defaults = (): Settings => ({
   autostart: true,
   autostartElevated: false,
   dim: { opacity: 0.5, color: "#000000" },
+  overlay: { hideFromCapture: false },
   paths: { screenshots: "", videos: "", records: "" },
   format: { image: "png", quality: 90 },
   filename: { template: "Reshot_{date}_{time}" },
@@ -475,6 +477,11 @@ async function load() {
   // -- Overlay
   bindFractionSlider("dimOpacity", "dimOpacityValue", () => draft.dim.opacity, (v) => (draft.dim.opacity = v));
   bindColor("dimColor", "dimColorSwatch", () => draft.dim.color, (v) => (draft.dim.color = v));
+  bindCheckbox(
+    "overlayHideFromCapture",
+    () => draft.overlay.hideFromCapture,
+    (v) => (draft.overlay.hideFromCapture = v),
+  );
 
   // -- Output
   bindText("pathScreenshots", () => draft.paths.screenshots, (v) => (draft.paths.screenshots = v));

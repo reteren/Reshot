@@ -23,6 +23,9 @@ public class SettingsServiceTests : IDisposable
         Assert.Equal(60, settings.Video.Fps);
         Assert.True(settings.Video.Audio.Mic);
         Assert.True(settings.Radial.ClickToChoose); // clicking is the default, not the gesture
+
+        // The overlay is visible to a screen share out of the box; hiding it is the opt-in.
+        Assert.False(settings.Overlay.HideFromCapture);
     }
 
     [Fact]
@@ -44,6 +47,7 @@ public class SettingsServiceTests : IDisposable
         service.Current.Dim.Opacity = 0.75;
         service.Current.Autostart = false;
         service.Current.Radial.ClickToChoose = false; // must differ from the default to prove anything
+        service.Current.Overlay.HideFromCapture = true;
         service.Save();
 
         var reloaded = new SettingsService(_tempFile);
@@ -53,6 +57,7 @@ public class SettingsServiceTests : IDisposable
         Assert.Equal(0.75, settings.Dim.Opacity);
         Assert.False(settings.Autostart);
         Assert.False(settings.Radial.ClickToChoose);
+        Assert.True(settings.Overlay.HideFromCapture);
     }
 
     [Fact]
@@ -83,6 +88,8 @@ public class SettingsServiceTests : IDisposable
         // which fails silently in both directions.
         Assert.Contains("\"radial\"", json);
         Assert.Contains("\"clickToChoose\"", json);
+        Assert.Contains("\"overlay\"", json);
+        Assert.Contains("\"hideFromCapture\"", json);
     }
 
     public void Dispose()
