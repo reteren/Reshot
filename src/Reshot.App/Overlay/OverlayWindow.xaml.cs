@@ -1825,10 +1825,11 @@ public partial class OverlayWindow : Window
         };
 
         // Click anywhere on the track jumps the thumb there AND keeps dragging in the
-        // same gesture (no release + re-press). See EnableSliderClickDrag.
-        EnableSliderClickDrag(ThicknessSlider);
-        EnableSliderClickDrag(OpacitySlider);
-        EnableSliderClickDrag(HardnessSlider);
+        // same gesture (no release + re-press); the wheel nudges the value without
+        // pressing anything. See EnableSliderInput.
+        EnableSliderInput(ThicknessSlider);
+        EnableSliderInput(OpacitySlider);
+        EnableSliderInput(HardnessSlider);
 
         HexInput.TextChanged += (_, _) => TryApplyHex(HexInput.Text);
 
@@ -1875,11 +1876,28 @@ public partial class OverlayWindow : Window
     // stops on release. Done entirely by hand, pressing captures the mouse on the slider
     // and drives Value straight from the cursor position, so there is no built-in Thumb
     // drag remembering a stale pre-jump origin.
-    private void EnableSliderClickDrag(Slider slider)
+    private void EnableSliderInput(Slider slider)
     {
         slider.PreviewMouseLeftButtonDown += SliderClickDrag_Down;
         slider.PreviewMouseMove += SliderClickDrag_Move;
         slider.PreviewMouseLeftButtonUp += SliderClickDrag_Up;
+        slider.PreviewMouseWheel += Slider_Wheel;
+    }
+
+    /// <summary>
+    /// One wheel notch over a slider moves it by one unit — the same unit the label
+    /// beside it shows (px or %). WPF's Slider ignores the wheel on its own, and the
+    /// overlay binds nothing else to it, so the event is consumed here.
+    /// </summary>
+    private static void Slider_Wheel(object sender, MouseWheelEventArgs e)
+    {
+        var slider = (Slider)sender;
+
+        // High-resolution wheels report fractions of the 120-unit notch; scaling by the
+        // notch keeps a slow scroll smooth instead of snapping a whole unit per event.
+        double delta = e.Delta / (double)Mouse.MouseWheelDeltaForOneLine;
+        slider.Value = Math.Clamp(slider.Value + delta, slider.Minimum, slider.Maximum);
+        e.Handled = true;
     }
 
     private void SliderClickDrag_Down(object sender, MouseButtonEventArgs e)

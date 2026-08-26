@@ -267,6 +267,31 @@ function bindText(id: string, get: () => string, set: (value: string) => void) {
   });
 }
 
+/**
+ * A wheel notch over a range input nudges it by one step, matching the overlay's
+ * own sliders. Range inputs ignore the wheel on their own, so the value is moved
+ * by hand and an `input` event is dispatched to run whatever the binder wired up.
+ */
+function enableWheel(input: HTMLInputElement) {
+  input.addEventListener(
+    "wheel",
+    (e) => {
+      // Non-passive on purpose: without this the tab scrolls under the cursor.
+      e.preventDefault();
+      const step = Number(input.step) || 1;
+      const current = Number(input.value);
+      const next = Math.min(
+        Number(input.max),
+        Math.max(Number(input.min), current + (e.deltaY < 0 ? step : -step))
+      );
+      if (next === current) return;
+      input.value = String(next);
+      input.dispatchEvent(new Event("input"));
+    },
+    { passive: false }
+  );
+}
+
 /** Slider over a 0..1 fraction rendered as a percentage. */
 function bindFractionSlider(
   id: string,
@@ -287,6 +312,8 @@ function bindFractionSlider(
     set(percent / 100);
     markDirty();
   });
+
+  enableWheel(input);
 }
 
 function bindIntSlider(
@@ -306,6 +333,8 @@ function bindIntSlider(
     set(Number(input.value));
     markDirty();
   });
+
+  enableWheel(input);
 }
 
 /**
