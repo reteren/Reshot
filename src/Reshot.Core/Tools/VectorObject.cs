@@ -29,6 +29,9 @@ public sealed class VectorObject
     public string Text { get; set; } = string.Empty;
     public float FontSize { get; set; } = 32f;
 
+    /// <summary>Text font family. Empty or unknown resolves to the default.</summary>
+    public string FontFamily { get; set; } = FontCatalog.DefaultFamily;
+
     /// <summary>Triangle apex direction, up when dragged upward, down when downward.</summary>
     public bool PointsUp { get; set; } = true;
 
@@ -123,7 +126,7 @@ public sealed class VectorObject
             IsAntialias = true,
             Style = SKPaintStyle.Fill,
             TextSize = FontSize,
-            Typeface = SKTypeface.FromFamilyName("Segoe UI"),
+            Typeface = FontCatalog.Resolve(FontFamily), // shared and cached; disposing the paint leaves it alone
         };
 
         // P1 is the top-left; offset down by the ascent so text sits below the click.
@@ -150,13 +153,32 @@ public sealed class VectorObject
         };
     }
 
-    /// <summary>Rough multi-line text extent: ~0.6 em per glyph, ~1.4 em line pitch.</summary>
+    /// <summary>
+    /// Multi-line text extent, measured with this object's own typeface and size: the widest
+    /// line, and ascent-to-descent plus one line pitch per extra line. Measured rather than
+    /// estimated because a condensed or monospaced family makes a per-glyph guess disagree
+    /// visibly with the drawn text, and this rect is what the user grabs and hit-tests.
+    /// </summary>
     private SKRect ComputeTextBounds()
     {
         var lines = (Text ?? string.Empty).Split('\n');
-        var maxLen = 1;
+
+        using var paint = new SKPaint
+        {
+            TextSize = FontSize,
+            Typeface = FontCatalog.Resolve(FontFamily),
+        };
+
+        var width = 0f;
         foreach (var line in lines)
-            maxLen = Math.Max(maxLen, line.Length);
-        return SKRect.Create(P1.X, P1.Y, FontSize * maxLen * 0.6f, FontSize * 1.4f * lines.Length);
+            width = Math.Max(width, paint.MeasureText(line));
+
+        var metrics = paint.FontMetrics;
+        var height = (lines.Length - 1) * paint.FontSpacing + (metrics.Descent - metrics.Ascent);
+
+        // DrawText places the first baseline at P1.Y - Ascent, so P1 is the top-left of the box.
+        // The floor keeps an empty or whitespace-only object grabbable.
+        var floor = FontSize * 0.25f;
+        return SKRect.Create(P1.X, P1.Y, Math.Max(width, floor), Math.Max(height, floor));
     }
 }

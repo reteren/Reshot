@@ -97,6 +97,27 @@ dropped because "erase part of an arrow" is worth more than "move an arrow after
 Export composition: base, then effects, then paint, cropped to the union of the selection
 paths, with everything outside those paths transparent.
 
+### Fonts
+
+`Reshot.Core/Tools/FontCatalog.cs` is the single place that enumerates the installed
+families and turns a family name into an `SKTypeface`. Everything that draws or measures
+text goes through it — the text object, the caret the overlay draws while typing, the
+picker in the tool panel — and nothing else calls `SKTypeface.FromFamilyName`, so a name
+is resolved and cached once, and an unknown one falls back to Segoe UI in exactly one
+place. The catalogue is built lazily and off the UI thread, because enumerating every
+installed family is slow enough to be felt on the first click.
+
+It lives in Core rather than in the WPF layer for the reason at the end of §2: Core owns
+rendering and knows nothing about windows, and the same typeface has to serve both the
+Skia canvas and the family name stored in the settings model.
+
+The trap worth knowing about: the picker's list is rendered by **WPF**, which quietly
+substitutes another font for glyphs the chosen family does not have, while the screenshot
+is rendered by **Skia**, which does not substitute anything. A Latin-only family therefore
+previews Cyrillic perfectly and then draws it as empty boxes on the image. That asymmetry
+is why `FontEntry` carries `SupportsCyrillic` and why the picker dims those rows — the
+preview cannot be trusted to show the failure by itself.
+
 ## 4. Erasers: the strength model
 
 An eraser stroke is a stamp with a radial alpha gradient:

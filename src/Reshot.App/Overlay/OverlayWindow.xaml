@@ -313,6 +313,280 @@
             <Setter Property="FontWeight" Value="Light" />
             <Setter Property="VerticalAlignment" Value="Center" />
         </Style>
+
+        <!-- ==== Font picker (Text tool) ==== -->
+
+        <!--
+            Inset HL2 scrollbar for the font dropdown. Windows' own scrollbar is the
+            one piece of default chrome the popup cannot hide, and it would be the
+            only flat-white surface in the HUD. Same sunken track / raised thumb
+            pairing as HlSlider; the repeat buttons stay hit-testable at zero opacity
+            so page-scrolling still works without drawing Aero arrows.
+        -->
+        <Style x:Key="HlScrollBar" TargetType="ScrollBar">
+            <Setter Property="Width" Value="11" />
+            <Setter Property="Cursor" Value="Arrow" />
+            <Setter Property="Template">
+                <Setter.Value>
+                    <ControlTemplate TargetType="ScrollBar">
+                        <Border Background="{StaticResource InputBg}"
+                                BorderThickness="1,1,0,0" BorderBrush="{StaticResource InputDark}">
+                            <Border BorderThickness="0,0,1,1" BorderBrush="{StaticResource InputLight}">
+                                <Track x:Name="PART_Track" IsDirectionReversed="True">
+                                    <Track.Thumb>
+                                        <Thumb>
+                                            <Thumb.Template>
+                                                <ControlTemplate TargetType="Thumb">
+                                                    <Border Background="{StaticResource BtnBg}"
+                                                            BorderThickness="1,1,0,0" BorderBrush="{StaticResource BevelLight}">
+                                                        <Border BorderThickness="0,0,1,1" BorderBrush="{StaticResource BevelDark}" />
+                                                    </Border>
+                                                </ControlTemplate>
+                                            </Thumb.Template>
+                                        </Thumb>
+                                    </Track.Thumb>
+                                    <Track.DecreaseRepeatButton>
+                                        <RepeatButton Opacity="0" Focusable="False" Command="ScrollBar.PageUpCommand" />
+                                    </Track.DecreaseRepeatButton>
+                                    <Track.IncreaseRepeatButton>
+                                        <RepeatButton Opacity="0" Focusable="False" Command="ScrollBar.PageDownCommand" />
+                                    </Track.IncreaseRepeatButton>
+                                </Track>
+                            </Border>
+                        </Border>
+                    </ControlTemplate>
+                </Setter.Value>
+            </Setter>
+        </Style>
+
+        <!--
+            One row of the font list, bound to Reshot.Core.Tools.FontEntry.
+
+            The FontFamily binding is the whole preview: every row draws its own name
+            in its own typeface. Families WPF cannot realise fall back to the default
+            rather than throwing the row away.
+
+            Dimming marks a family with no Cyrillic coverage. WPF silently substitutes
+            a fallback face for glyphs a font lacks, so a Latin-only family previews
+            perfectly here and then draws Russian text as empty boxes in the Skia-
+            rendered screenshot — this is the only warning the user gets.
+        -->
+        <DataTemplate x:Key="FontEntryTemplate">
+            <TextBlock Text="{Binding Family}"
+                       FontFamily="{Binding Family, FallbackValue=Segoe UI, TargetNullValue=Segoe UI}"
+                       FontSize="14"
+                       Foreground="{StaticResource Ink}"
+                       TextTrimming="CharacterEllipsis"
+                       VerticalAlignment="Center">
+                <TextBlock.Style>
+                    <Style TargetType="TextBlock">
+                        <Style.Triggers>
+                            <DataTrigger Binding="{Binding SupportsCyrillic}" Value="False">
+                                <Setter Property="Opacity" Value="0.45" />
+                                <Setter Property="ToolTip" Value="No Cyrillic glyphs in this font" />
+                            </DataTrigger>
+                        </Style.Triggers>
+                    </Style>
+                </TextBlock.Style>
+            </TextBlock>
+        </DataTemplate>
+
+        <!-- Dropdown row: accent highlight like HlMenuItem, dimmed accent for the
+             current selection so it stays findable after the list is scrolled. -->
+        <Style x:Key="HlComboItem" TargetType="ComboBoxItem">
+            <Setter Property="Foreground" Value="{StaticResource Ink}" />
+            <Setter Property="Padding" Value="7,3" />
+            <Setter Property="HorizontalContentAlignment" Value="Stretch" />
+            <Setter Property="SnapsToDevicePixels" Value="True" />
+            <Setter Property="Template">
+                <Setter.Value>
+                    <ControlTemplate TargetType="ComboBoxItem">
+                        <Border x:Name="Row" Background="Transparent" Padding="{TemplateBinding Padding}">
+                            <ContentPresenter HorizontalAlignment="Stretch" VerticalAlignment="Center" />
+                        </Border>
+                        <ControlTemplate.Triggers>
+                            <Trigger Property="IsSelected" Value="True">
+                                <Setter TargetName="Row" Property="Background" Value="{StaticResource AccentDim}" />
+                            </Trigger>
+                            <Trigger Property="IsHighlighted" Value="True">
+                                <Setter TargetName="Row" Property="Background" Value="{StaticResource Accent}" />
+                            </Trigger>
+                        </ControlTemplate.Triggers>
+                    </ControlTemplate>
+                </Setter.Value>
+            </Setter>
+        </Style>
+
+        <!--
+            Bevelled VGUI combo box. WPF's stock ComboBox brings Aero chrome that has
+            no counterpart anywhere else in the HUD, so the whole control is templated:
+            a sunken InputBg well like the sliders, a raised popup on PanelTint, and
+            HlButton's accent for hover / open.
+
+            The closed box reuses ItemTemplate through SelectionBoxItemTemplate, so
+            the current family is previewed in its own typeface without a second
+            template to keep in sync.
+        -->
+        <Style x:Key="HlCombo" TargetType="ComboBox">
+            <Setter Property="Foreground" Value="{StaticResource Ink}" />
+            <Setter Property="MinHeight" Value="24" />
+            <Setter Property="VerticalAlignment" Value="Center" />
+            <Setter Property="Cursor" Value="Arrow" />
+            <Setter Property="SnapsToDevicePixels" Value="True" />
+            <!-- ~320px shows a dozen rows: a 500-family list scrolls instead of
+                 covering the screenshot the user is annotating. -->
+            <Setter Property="MaxDropDownHeight" Value="320" />
+            <!-- Never focusable and never type-to-search: a closed combo that held keyboard
+                 focus ate the user's typing after they placed the text caret. The real search
+                 is the FontSearch box pinned inside the dropdown. -->
+            <Setter Property="Focusable" Value="False" />
+            <Setter Property="IsTextSearchEnabled" Value="False" />
+            <Setter Property="ItemTemplate" Value="{StaticResource FontEntryTemplate}" />
+            <Setter Property="ItemContainerStyle" Value="{StaticResource HlComboItem}" />
+            <!-- Every row materialises a distinct WPF FontFamily, which is expensive:
+                 without virtualisation + recycling, opening the list stalls for seconds. -->
+            <Setter Property="VirtualizingStackPanel.IsVirtualizing" Value="True" />
+            <Setter Property="VirtualizingStackPanel.VirtualizationMode" Value="Recycling" />
+            <Setter Property="ScrollViewer.CanContentScroll" Value="True" />
+            <Setter Property="ItemsPanel">
+                <Setter.Value>
+                    <ItemsPanelTemplate>
+                        <VirtualizingStackPanel IsVirtualizing="True" VirtualizationMode="Recycling" />
+                    </ItemsPanelTemplate>
+                </Setter.Value>
+            </Setter>
+            <Setter Property="Template">
+                <Setter.Value>
+                    <ControlTemplate TargetType="ComboBox">
+                        <Grid>
+                            <!-- The toggle fills the row so a click anywhere opens the list;
+                                 the selection preview sits on top of it, hit-transparent. -->
+                            <ToggleButton x:Name="Toggle"
+                                          Focusable="False"
+                                          ClickMode="Press"
+                                          IsChecked="{Binding IsDropDownOpen, Mode=TwoWay, RelativeSource={RelativeSource TemplatedParent}}">
+                                <ToggleButton.Template>
+                                    <ControlTemplate TargetType="ToggleButton">
+                                        <Border x:Name="Outer" Background="{StaticResource InputBg}"
+                                                BorderThickness="1,1,0,0" BorderBrush="{StaticResource InputDark}">
+                                            <Border x:Name="Inner" BorderThickness="0,0,1,1" BorderBrush="{StaticResource InputLight}">
+                                                <Path x:Name="Chevron"
+                                                      HorizontalAlignment="Right" VerticalAlignment="Center"
+                                                      Margin="0,0,7,0"
+                                                      Fill="{StaticResource Ink}"
+                                                      Data="M0,0 L7,0 L3.5,4.5 Z" />
+                                            </Border>
+                                        </Border>
+                                        <ControlTemplate.Triggers>
+                                            <Trigger Property="IsMouseOver" Value="True">
+                                                <Setter TargetName="Outer" Property="Background" Value="{StaticResource Accent}" />
+                                            </Trigger>
+                                            <!-- Open reads as pressed: the bevel inverts, like a latched HlButton. -->
+                                            <Trigger Property="IsChecked" Value="True">
+                                                <Setter TargetName="Outer" Property="Background" Value="{StaticResource AccentDim}" />
+                                                <Setter TargetName="Outer" Property="BorderBrush" Value="{StaticResource InputLight}" />
+                                                <Setter TargetName="Inner" Property="BorderBrush" Value="{StaticResource InputDark}" />
+                                            </Trigger>
+                                        </ControlTemplate.Triggers>
+                                    </ControlTemplate>
+                                </ToggleButton.Template>
+                            </ToggleButton>
+
+                            <ContentPresenter x:Name="SelectionBox"
+                                              Margin="7,0,20,0"
+                                              VerticalAlignment="Center"
+                                              IsHitTestVisible="False"
+                                              Content="{TemplateBinding SelectionBoxItem}"
+                                              ContentTemplate="{TemplateBinding SelectionBoxItemTemplate}"
+                                              ContentStringFormat="{TemplateBinding SelectionBoxItemStringFormat}" />
+
+                            <!-- Focusable so the FontSearch box inside can take keyboard focus
+                                 while the dropdown is open; the closed combo never can. -->
+                            <Popup x:Name="PART_Popup"
+                                   Placement="Bottom"
+                                   VerticalOffset="1"
+                                   Focusable="True"
+                                   AllowsTransparency="True"
+                                   PopupAnimation="None"
+                                   IsOpen="{TemplateBinding IsDropDownOpen}">
+                                <!-- Pinned to the combo's own width at both ends: without the
+                                     maximum, one long family name stretches the popup past the
+                                     272px panel it belongs to and the rows never ellipsise. -->
+                                <Border MinWidth="{Binding ActualWidth, RelativeSource={RelativeSource TemplatedParent}}"
+                                        MaxWidth="{Binding ActualWidth, RelativeSource={RelativeSource TemplatedParent}}"
+                                        MaxHeight="{TemplateBinding MaxDropDownHeight}"
+                                        Background="{StaticResource PanelTint}"
+                                        BorderThickness="1,1,0,0" BorderBrush="{StaticResource BevelLight}"
+                                        SnapsToDevicePixels="True">
+                                    <Border BorderThickness="0,0,1,1" BorderBrush="{StaticResource BevelDark}" Padding="2">
+                                        <Grid>
+                                            <Grid.RowDefinitions>
+                                                <RowDefinition Height="Auto" />
+                                                <RowDefinition Height="*" />
+                                            </Grid.RowDefinitions>
+
+                                            <!-- Pinned above the list so it stays put while the
+                                                 families scroll; typing filters them live. -->
+                                            <Border Grid.Row="0" Margin="2,2,2,4"
+                                                    BorderThickness="1,1,0,0" BorderBrush="{StaticResource InputDark}">
+                                                <Border Background="{StaticResource InputBg}"
+                                                        BorderThickness="0,0,1,1" BorderBrush="{StaticResource InputLight}">
+                                                    <Grid>
+                                                        <TextBlock x:Name="FontSearchPlaceholder"
+                                                                   Text="Search fonts"
+                                                                   Foreground="{StaticResource Ink}"
+                                                                   FontSize="11"
+                                                                   Opacity="0.45"
+                                                                   Margin="4,0"
+                                                                   VerticalAlignment="Center"
+                                                                   IsHitTestVisible="False">
+                                                            <TextBlock.Style>
+                                                                <Style TargetType="TextBlock">
+                                                                    <Setter Property="Visibility" Value="Collapsed" />
+                                                                    <Style.Triggers>
+                                                                        <DataTrigger Binding="{Binding Text, ElementName=FontSearch}" Value="">
+                                                                            <Setter Property="Visibility" Value="Visible" />
+                                                                        </DataTrigger>
+                                                                    </Style.Triggers>
+                                                                </Style>
+                                                            </TextBlock.Style>
+                                                        </TextBlock>
+                                                        <TextBox x:Name="FontSearch"
+                                                                 Height="22"
+                                                                 Padding="4,2"
+                                                                 Background="Transparent"
+                                                                 BorderThickness="0"
+                                                                 Foreground="{StaticResource Ink}"
+                                                                 CaretBrush="{StaticResource Ink}"
+                                                                 FontSize="11"
+                                                                 VerticalContentAlignment="Center" />
+                                                    </Grid>
+                                                </Border>
+                                            </Border>
+
+                                            <ScrollViewer Grid.Row="1"
+                                                          CanContentScroll="True"
+                                                          HorizontalScrollBarVisibility="Disabled"
+                                                          VerticalScrollBarVisibility="Auto">
+                                                <ScrollViewer.Resources>
+                                                    <Style TargetType="ScrollBar" BasedOn="{StaticResource HlScrollBar}" />
+                                                </ScrollViewer.Resources>
+                                                <ItemsPresenter />
+                                            </ScrollViewer>
+                                        </Grid>
+                                    </Border>
+                                </Border>
+                            </Popup>
+                        </Grid>
+                        <ControlTemplate.Triggers>
+                            <Trigger Property="IsEnabled" Value="False">
+                                <Setter Property="Opacity" Value="0.35" />
+                            </Trigger>
+                        </ControlTemplate.Triggers>
+                    </ControlTemplate>
+                </Setter.Value>
+            </Setter>
+        </Style>
     </Window.Resources>
 
     <Grid x:Name="RootGrid">
@@ -368,6 +642,12 @@
                         <TextBlock x:Name="ThicknessValue" Text="5 px" Style="{StaticResource PanelLabel}"
                                    Width="40" DockPanel.Dock="Right" TextAlignment="Right" />
                         <Slider x:Name="ThicknessSlider" Style="{StaticResource HlSlider}" Minimum="1" Maximum="200" Value="5" />
+                    </DockPanel>
+
+                    <!-- Text-tool only; the panel shows it when that tool is picked. -->
+                    <DockPanel x:Name="FontRow" Margin="0,0,0,8" Visibility="Collapsed">
+                        <TextBlock Text="Font" Style="{StaticResource PanelLabel}" Width="88" DockPanel.Dock="Left" />
+                        <ComboBox x:Name="FontCombo" Style="{StaticResource HlCombo}" SelectedValuePath="Family" />
                     </DockPanel>
 
                     <DockPanel x:Name="StrengthRow" Margin="0,0,0,8">

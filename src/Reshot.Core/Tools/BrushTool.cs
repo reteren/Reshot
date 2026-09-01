@@ -20,6 +20,9 @@ public sealed class BrushSettings
     /// this fraction at the rim, giving a soft gradient. Erasers only.
     /// </summary>
     public float Hardness { get; set; } = 1f;
+
+    /// <summary>Text tool font family. Empty or unknown resolves to the default.</summary>
+    public string FontFamily { get; set; } = FontCatalog.DefaultFamily;
 }
 
 /// <summary>

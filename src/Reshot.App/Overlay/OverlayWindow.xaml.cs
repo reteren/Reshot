@@ -1,6 +1,8 @@
+using System.ComponentModel;
 using System.Runtime.InteropServices;
 using System.Windows;
 using System.Windows.Controls;
+using System.Windows.Data;
 using System.Windows.Input;
 using System.Windows.Interop;
 using System.Windows.Media;
@@ -223,6 +225,12 @@ public partial class OverlayWindow : Window
         _frame = frame;
         _settings = settings;
         _exporter = new CaptureExporter(settings);
+
+        // Enumerating the installed families opens every font file to test glyph
+        // coverage. Started here so it overlaps with building the window instead of
+        // stalling the UI thread the first time the Text tool's panel is pulled out.
+        FontCatalog.Warmup();
+
         InitializeComponent();
 
         SourceInitialized += OnSourceInitialized;
@@ -919,6 +927,11 @@ public partial class OverlayWindow : Window
         StrengthLabel.Text = category == ToolCategory.Effects ? "Strength" : "Opacity";
         HardnessRow.Visibility = eraser ? Visibility.Visible : Visibility.Collapsed;
 
+        // Only the Text tool draws glyphs, and settings are per tool, so the combo
+        // has to follow the switch rather than keep the previous tool's family.
+        FontRow.Visibility = _drawSub == DrawSubTool.Text ? Visibility.Visible : Visibility.Collapsed;
+        SyncFontCombo();
+
         // The strip is shown from here (tool switches) as well as from PositionToolbar
         // (selection changes), so it has to lay itself out on both paths.
         LayoutSettingsStrip();
@@ -1058,6 +1071,7 @@ public partial class OverlayWindow : Window
             P1 = ToSkPhysical(p),
             Color = _brush.Color,
             FontSize = Math.Max(16f, _brush.Thickness * 5f),
+            FontFamily = _brush.FontFamily,
         };
         // Pull keyboard focus off whatever toolbar button was last clicked so the
         // caret really receives keys; PreviewKeyDown covers the rest either way.
@@ -1072,7 +1086,9 @@ public partial class OverlayWindow : Window
         using var measure = new SKPaint
         {
             TextSize = text.FontSize,
-            Typeface = SKTypeface.FromFamilyName("Segoe UI"),
+            // Same typeface the glyphs are drawn with, or the caret drifts off the
+            // end of the line as soon as the picker leaves the default family.
+            Typeface = FontCatalog.Resolve(text.FontFamily),
         };
         var lines = (text.Text ?? string.Empty).Split('\n');
         var last = lines.Length > 0 ? lines[^1] : string.Empty;
@@ -1108,6 +1124,8 @@ public partial class OverlayWindow : Window
     protected override void OnTextInput(TextCompositionEventArgs e)
     {
         base.OnTextInput(e);
+        if (Keyboard.FocusedElement is TextBox)
+            return; // the search box and the hex field own their characters
         if (_textEditing is null || string.IsNullOrEmpty(e.Text))
             return;
 
@@ -1805,6 +1823,28 @@ public partial class OverlayWindow : Window
 
     private bool _syncingHex;
 
+    // Same idiom as _syncingHex: SelectedValue is written from code (tool switch, first
+    // fill), which raises SelectionChanged and would write the value straight back into
+    // whatever tool happens to be active.
+    private bool _syncingFont;
+
+    // Null until the background fill lands; also the list SyncFontCombo validates against.
+    private IReadOnlyList<FontEntry>? _fontFamilies;
+
+    // The view the search box filters. Filtering through the view keeps the virtualised
+    // rows alive between keystrokes; re-assigning ItemsSource would tear them down and
+    // rebuild them on every character.
+    private ICollectionView? _fontView;
+
+    // The search box lives inside the HlCombo template, so the XAML generates no field
+    // for it and it only exists once the panel has shown the combo. Resolved lazily
+    // from the template; its events are wired exactly once on the first dropdown open.
+    private TextBox? _fontSearch;
+    private bool _fontSearchWired;
+
+    private TextBox? FontSearchBox =>
+        _fontSearch ??= FontCombo.Template?.FindName("FontSearch", FontCombo) as TextBox;
+
     private void WireBrushPanel()
     {
         ThicknessSlider.ValueChanged += (_, e) =>
@@ -1830,6 +1870,80 @@ public partial class OverlayWindow : Window
         EnableSliderInput(ThicknessSlider);
         EnableSliderInput(OpacitySlider);
         EnableSliderInput(HardnessSlider);
+
+        FontCombo.SelectionChanged += (_, _) =>
+        {
+            if (_syncingFont || FontCombo.SelectedValue is not string family)
+                return;
+
+            _brush.FontFamily = family;
+
+            // Re-typeset what is under the caret right now: seeing the sentence change
+            // family is the whole reason the picker sits in this panel.
+            if (_textEditing is not null)
+            {
+                _textEditing.FontFamily = family;
+                RefreshDrawSurface();
+            }
+        };
+
+        // The dropdown owns a dedicated search box, so the combo itself never holds
+        // focus. On open the box is cleared and takes focus; on close the search is
+        // dropped and focus returns to the overlay, where the next keystroke belongs
+        // to the text annotation being typed rather than to a closed combo's search.
+        FontCombo.DropDownOpened += (_, _) =>
+        {
+            if (FontSearchBox is not { } search)
+                return; // template not applied yet; it will resolve the next open
+
+            // The box is created when the combo's template is applied, so its events
+            // are wired once, the first time the dropdown actually opens.
+            if (!_fontSearchWired)
+            {
+                _fontSearchWired = true;
+
+                // Live narrowing as the user types. The selection is deliberately left
+                // alone: the SelectionChanged guard ignores a nulled-out SelectedValue,
+                // so the tool's family survives even when a search term hides it.
+                search.TextChanged += (_, _) => ApplyFontFilter(search.Text);
+
+                // Escape closes the dropdown from inside the search box. It sits on
+                // the box itself so it works even though the popup is a separate
+                // window that the overlay's own PreviewKeyDown never sees.
+                search.KeyDown += (_, e) =>
+                {
+                    if (e.Key == Key.Escape)
+                    {
+                        FontCombo.IsDropDownOpen = false;
+                        e.Handled = true;
+                    }
+                };
+            }
+
+            // A stale search would hide the previously picked family the moment the
+            // list opens, so every open starts from a clean slate.
+            search.Clear();
+
+            // The popup realises its content asynchronously, so a straight call here
+            // can land before the box is hittable; queue the focus handoff instead.
+            Dispatcher.BeginInvoke(DispatcherPriority.Input, new Action(() =>
+            {
+                search.Focus();
+                Keyboard.Focus(search);
+            }));
+        };
+
+        FontCombo.DropDownClosed += (_, _) =>
+        {
+            // Clear() drops the filter via TextChanged. Filtering may have hidden the
+            // picked family and WPF may have nulled the selection in the meantime, so
+            // point the combo back at the tool's family rather than leaving it blank.
+            FontSearchBox?.Clear();
+            SyncFontCombo();
+            Keyboard.Focus(this);
+        };
+
+        FillFontComboAsync();
 
         HexInput.TextChanged += (_, _) => TryApplyHex(HexInput.Text);
 
@@ -1869,6 +1983,94 @@ public partial class OverlayWindow : Window
             swatch.MouseLeftButtonDown += (_, _) => HexInput.Text = captured;
             SwatchGrid.Children.Add(swatch);
         }
+    }
+
+    /// <summary>
+    /// Fills the font picker off the UI thread. Warmup normally has the catalogue ready
+    /// by now, but the very first session can still be building it, and the overlay must
+    /// stay responsive either way — until this lands the combo is simply empty.
+    /// </summary>
+    private async void FillFontComboAsync()
+    {
+        var families = await Task.Run(() => FontCatalog.Families);
+
+        // The session can be closed while the catalogue is still being built.
+        if (!IsLoaded)
+            return;
+
+        _fontFamilies = families;
+        _syncingFont = true;
+        try
+        {
+            FontCombo.ItemsSource = families;
+        }
+        finally
+        {
+            _syncingFont = false;
+        }
+
+        // The view the search box filters. Taken from the combo's own ItemsSource so
+        // the two can never drift apart; the ComboBox already binds to this same view.
+        _fontView = CollectionViewSource.GetDefaultView(FontCombo.ItemsSource);
+
+        // The dropdown can be open and searched before the catalogue lands; make the
+        // late list honour whatever is already in the box instead of showing everything.
+        var searchText = FontSearchBox?.Text;
+        if (!string.IsNullOrEmpty(searchText))
+            ApplyFontFilter(searchText);
+
+        SyncFontCombo();
+    }
+
+    /// <summary>
+    /// Points the combo at the active tool's family. An unknown one (settings carried
+    /// over from a machine that had the font) falls back the same way the renderer does.
+    /// </summary>
+    private void SyncFontCombo()
+    {
+        if (_fontFamilies is null)
+            return; // still filling; FillFontComboAsync syncs once the list arrives
+
+        // Match case-insensitively but select the catalogue's own spelling, because
+        // SelectedValue is compared against the item's Family verbatim.
+        var match = _fontFamilies.FirstOrDefault(
+            f => string.Equals(f.Family, _brush.FontFamily, StringComparison.OrdinalIgnoreCase));
+
+        // Falling back to the default family is only right while that family is installed;
+        // on a Windows SKU without Segoe UI it names no item and WPF answers by showing
+        // nothing at all, so the picker would come up blank. Anything real beats that.
+        var selected = match?.Family
+            ?? _fontFamilies.FirstOrDefault(
+                f => string.Equals(f.Family, FontCatalog.DefaultFamily, StringComparison.OrdinalIgnoreCase))?.Family
+            ?? _fontFamilies.FirstOrDefault()?.Family;
+
+        _syncingFont = true;
+        try
+        {
+            FontCombo.SelectedValue = selected;
+        }
+        finally
+        {
+            _syncingFont = false;
+        }
+    }
+
+    /// <summary>
+    /// Narrows the font view to families containing <paramref name="text"/>. An empty
+    /// search drops the filter entirely and shows the full list. The ComboBox keeps its
+    /// selection: if the filter hides it, WPF nulls it, but the SelectionChanged guard
+    /// refuses to write null back into the tool settings, so the family survives.
+    /// </summary>
+    private void ApplyFontFilter(string text)
+    {
+        if (_fontView is null)
+            return; // still filling; there is nothing to filter yet
+
+        _fontView.Filter = string.IsNullOrEmpty(text)
+            ? null
+            : o => o is FontEntry entry &&
+                   entry.Family.Contains(text, StringComparison.OrdinalIgnoreCase);
+        _fontView.Refresh();
     }
 
     // Simple, predictable slider interaction: press anywhere on the track and the value
@@ -2555,6 +2757,19 @@ public partial class OverlayWindow : Window
     protected override void OnPreviewKeyDown(KeyEventArgs e)
     {
         base.OnPreviewKeyDown(e);
+
+        // The font search box and the hex field own their keys; the annotation must
+        // not steal Space/Backspace from a live search. Escape with the dropdown open
+        // closes the dropdown rather than committing the text being typed.
+        if (Keyboard.FocusedElement is TextBox)
+        {
+            if (e.Key == Key.Escape && FontCombo.IsDropDownOpen)
+            {
+                FontCombo.IsDropDownOpen = false;
+                e.Handled = true;
+            }
+            return;
+        }
 
         if (_textEditing is null)
             return;

@@ -3,7 +3,61 @@
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and this
 project adheres to [Semantic Versioning](https://semver.org/).
 
-## [Unreleased]
+## [1.1.4] - 2026-09-01
+
+### Added
+
+- The font dropdown has a search box pinned at the top of it, filtering the list as you type. With
+  a few hundred families installed, scrolling was the only way to reach one.
+
+### Fixed
+
+- Typing an annotation after choosing a font goes into the annotation again. The closed font picker
+  used to keep the keyboard to itself and read every letter as a jump-to-that-font, so the list
+  flickered and the family changed on each keystroke; the keys that got past it landed on the tool
+  shortcuts, which is what folded the settings panel away in the middle of a word. The picker can no
+  longer take the keyboard at all — the search box does the searching now.
+- The tool settings panel — colour, size, opacity, font — stays open while text is being typed, so
+  the annotation can still be restyled without starting it over.
+
+## [1.1.3] - 2026-09-01
+
+### Added
+
+- The Text tool draws in any font installed on the machine, picked from the same panel as
+  the colour palette. Every family in the list is drawn in its own typeface, so the list
+  is the preview: no choosing a name, typing a line and finding out afterwards.
+- Families that cannot draw Cyrillic are dimmed in that list. Picking one is still
+  allowed, but Russian text in it comes out as empty boxes — the screenshot is drawn by
+  Skia, which renders what the font actually has and nothing else — so the list says so
+  before you type rather than after.
+
+### Changed
+
+- The area a piece of text occupies is measured from the font's own metrics instead of
+  being estimated at roughly 0.6 em per character. That area is what gets baked into the
+  image and what undo restores, so text in a wide font is no longer at risk of being
+  clipped by a box that assumed a narrower one.
+
+## [1.1.2] - 2026-08-26
+
+### Added
+
+- Every slider takes the mouse wheel: size, opacity and hardness in the overlay, and all
+  of them in the settings window. A notch is worth one unit of whatever the label beside
+  the slider shows, a pixel or a percent, and in the overlay a high-resolution wheel moves
+  the value proportionally rather than jumping a whole unit per event. Neither WPF's
+  slider nor an HTML range input answers the wheel on its own, so a small correction used
+  to mean putting the cursor on the thumb first.
+
+### Fixed
+
+- The build stamps its own version again. Everything after 1.1.0, the 1.1.1 release
+  included, still reported `1.1.0` in the executable's file properties and in the version
+  the settings window is built with, which made those artifacts indistinguishable from the
+  release before them.
+
+## [1.1.1] - 2026-08-23
 
 ### Added
 
