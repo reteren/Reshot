@@ -196,6 +196,15 @@ public partial class OverlayWindow : Window
     private double _dpiScaleX = 1.0;
     private double _dpiScaleY = 1.0;
 
+    /// <summary>
+    /// The monitor the toolbar and everything anchored to it are kept on. The overlay
+    /// spans the whole virtual desktop, so clamping the chrome to the window would let
+    /// it settle on a neighbouring screen — or, when the monitors are not flush, in the
+    /// dead space of the bounding box, where nothing is displayed at all.
+    /// <see cref="Rect.Empty"/> until a selection picks one.
+    /// </summary>
+    private Rect _chromeScreen = Rect.Empty;
+
     private bool _selectionActive;
 
     /// <summary>Raised when the session ends. True if a result was produced.</summary>
@@ -536,14 +545,15 @@ public partial class OverlayWindow : Window
         var offset = anchor.TranslatePoint(new Point(0, 0), Toolbar);
         var x = toolbarLeft + offset.X + (anchor.ActualWidth - flyout.ActualWidth) / 2;
 
+        var screen = ChromeScreen;
         var y = toolbarTop - flyout.ActualHeight - 4;
         if (SettingsStrip.Visibility == Visibility.Visible)
             y -= SettingsStrip.ActualHeight + 3;
-        if (y < 0)
+        if (y < screen.Top)
             y = toolbarTop + Toolbar.ActualHeight + 4;
 
-        x = Math.Clamp(x, 0, Math.Max(0, RootGrid.ActualWidth - flyout.ActualWidth));
-        y = Math.Clamp(y, 0, Math.Max(0, RootGrid.ActualHeight - flyout.ActualHeight));
+        x = ClampTo(x, screen.Left, screen.Right - flyout.ActualWidth);
+        y = ClampTo(y, screen.Top, screen.Bottom - flyout.ActualHeight);
         Canvas.SetLeft(flyout, x);
         Canvas.SetTop(flyout, y);
     }
@@ -956,12 +966,13 @@ public partial class OverlayWindow : Window
             return;
 
         SettingsStrip.Width = BrushPanel.Width;
+        var screen = ChromeScreen;
 
         var y = toolbarY - SettingsStrip.Height - 3;
-        if (y < 0)
+        if (y < screen.Top)
             y = toolbarY + Toolbar.ActualHeight + 3;
 
-        var x = Math.Clamp(toolbarX, 0, Math.Max(0, RootGrid.ActualWidth - SettingsStrip.Width));
+        var x = ClampTo(toolbarX, screen.Left, screen.Right - SettingsStrip.Width);
         Canvas.SetLeft(SettingsStrip, x);
         Canvas.SetTop(SettingsStrip, y);
     }
@@ -2243,14 +2254,15 @@ public partial class OverlayWindow : Window
         if (double.IsNaN(toolbarY)) toolbarY = 120;
 
         var height = MeasurePanelHeight();
-        var x = Math.Clamp(toolbarX, 0, Math.Max(0, RootGrid.ActualWidth - BrushPanel.Width));
+        var screen = ChromeScreen;
+        var x = ClampTo(toolbarX, screen.Left, screen.Right - BrushPanel.Width);
 
         var stripClosed = toolbarY - SettingsStrip.Height - gap;
         var stripOpen = toolbarY - gap - height - SettingsStrip.Height;
 
         // Too tall to fit above the toolbar: pin it to the top edge instead.
-        if (stripOpen < 0)
-            stripOpen = 0;
+        if (stripOpen < screen.Top)
+            stripOpen = screen.Top;
 
         return (x, stripClosed, stripOpen, height);
     }
@@ -2939,15 +2951,53 @@ public partial class OverlayWindow : Window
         UpdateVisuals();
     }
 
-    private Rect PrimaryMonitorRect()
-    {
-        var m = _frame.Monitors.FirstOrDefault(x => x.IsPrimary) ?? _frame.Monitors[0];
-        var x = (m.Left - _frame.VirtualLeft) / _dpiScaleX;
-        var y = (m.Top - _frame.VirtualTop) / _dpiScaleY;
-        return new Rect(x, y, m.Width / _dpiScaleX, m.Height / _dpiScaleY);
-    }
+    private Rect PrimaryMonitorRect() =>
+        MonitorRect(_frame.Monitors.FirstOrDefault(x => x.IsPrimary) ?? _frame.Monitors[0]);
 
     private Rect AllMonitorsRect() => new(0, 0, RootGrid.ActualWidth, RootGrid.ActualHeight);
+
+    /// <summary>One monitor's placement in the overlay's own (DIP) coordinates.</summary>
+    private Rect MonitorRect(CapturedMonitor m) => new(
+        (m.Left - _frame.VirtualLeft) / _dpiScaleX,
+        (m.Top - _frame.VirtualTop) / _dpiScaleY,
+        m.Width / _dpiScaleX,
+        m.Height / _dpiScaleY);
+
+    /// <summary>
+    /// The monitor a selection mostly lives on — the one whose chrome the user is
+    /// looking at. Falls back to the whole overlay if the selection somehow touches no
+    /// monitor, which only happens in the gaps between misaligned screens.
+    /// </summary>
+    private Rect AnchorScreen(Rect sel)
+    {
+        var best = Rect.Empty;
+        var bestArea = 0.0;
+
+        foreach (var m in _frame.Monitors)
+        {
+            var r = MonitorRect(m);
+            var hit = Rect.Intersect(r, sel);
+            var area = hit.IsEmpty ? 0 : hit.Width * hit.Height;
+            if (area > bestArea)
+            {
+                bestArea = area;
+                best = r;
+            }
+        }
+
+        return best.IsEmpty ? AllMonitorsRect() : best;
+    }
+
+    /// <summary>The screen the toolbar and its panels are currently pinned to.</summary>
+    private Rect ChromeScreen => _chromeScreen.IsEmpty ? AllMonitorsRect() : _chromeScreen;
+
+    /// <summary>
+    /// <see cref="Math.Clamp(double, double, double)"/> without the throw: a panel wider
+    /// than the screen it is being fitted to inverts the bounds, and pinning it to the
+    /// left edge is the sane answer.
+    /// </summary>
+    private static double ClampTo(double value, double min, double max) =>
+        max <= min ? min : Math.Clamp(value, min, max);
 
     // ---- Geometry helpers ------------------------------------------------------
 
@@ -3246,24 +3296,28 @@ public partial class OverlayWindow : Window
         const double gap = 6;
         var bw = SizeBadge.ActualWidth;
         var bh = SizeBadge.ActualHeight;
+        var screen = AnchorScreen(sel);
 
         var x = sel.Left;
         var y = sel.Top - bh - gap;
 
-        if (y < 0)
+        if (y < screen.Top)
         {
             x = sel.Left + gap;
             y = sel.Top + gap;
         }
 
-        Canvas.SetLeft(SizeBadge, Math.Clamp(x, 0, Math.Max(0, RootGrid.ActualWidth - bw)));
-        Canvas.SetTop(SizeBadge, Math.Clamp(y, 0, Math.Max(0, RootGrid.ActualHeight - bh)));
+        Canvas.SetLeft(SizeBadge, ClampTo(x, screen.Left, screen.Right - bw));
+        Canvas.SetTop(SizeBadge, ClampTo(y, screen.Top, screen.Bottom - bh));
     }
 
     /// <summary>
     /// Places the toolbar just outside the selection's bottom-right corner; if there
-    /// is no room below (selection reaches the screen edge), it tucks inside instead
-    /// (SPEC §5). Positions are clamped to stay fully on-screen.
+    /// is no room below, it tucks inside the selection instead (SPEC §5). Everything is
+    /// measured against the monitor the selection sits on, not the overlay window: the
+    /// window covers every screen, so clamping to it would push the bar off the selected
+    /// monitor entirely for a full-screen selection (Ctrl+A), and a selection spanning
+    /// all monitors could park it in the unlit dead space between them.
     /// </summary>
     private void PositionToolbar(Rect sel)
     {
@@ -3274,14 +3328,23 @@ public partial class OverlayWindow : Window
         var th = Toolbar.ActualHeight;
         const double margin = 8;
 
+        var screen = AnchorScreen(sel);
+        _chromeScreen = screen;
+
         var x = sel.Right - tw;
         var y = sel.Bottom + margin;
 
-        if (y + th > RootGrid.ActualHeight)
-            y = sel.Bottom - th - margin;
+        // Nothing but screen edge below the selection: sit inside its bottom-right
+        // corner. Clamping to the selection as well as the screen keeps the bar within
+        // the frame the user is looking at even when the selection runs off-monitor.
+        if (y + th > screen.Bottom)
+        {
+            y = Math.Min(sel.Bottom, screen.Bottom) - th - margin;
+            x = ClampTo(x, Math.Max(screen.Left, sel.Left), Math.Min(screen.Right, sel.Right) - tw);
+        }
 
-        x = Math.Clamp(x, 0, Math.Max(0, RootGrid.ActualWidth - tw));
-        y = Math.Clamp(y, 0, Math.Max(0, RootGrid.ActualHeight - th));
+        x = ClampTo(x, screen.Left, screen.Right - tw);
+        y = ClampTo(y, screen.Top, screen.Bottom - th);
 
         Canvas.SetLeft(Toolbar, x);
         Canvas.SetTop(Toolbar, y);
