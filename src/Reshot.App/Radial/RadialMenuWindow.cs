@@ -140,7 +140,18 @@ public sealed class RadialMenuWindow : Window
         MouseRightButtonDown += (_, _) => Cancel();
         KeyDown += (_, e) => { if (e.Key == Key.Escape) Cancel(); };
         Loaded += OnLoaded;
-        Closed += (_, _) => StopPoll();
+    }
+
+    protected override void OnClosed(EventArgs e)
+    {
+        StopPoll();
+        _scale.BeginAnimation(ScaleTransform.ScaleXProperty, null);
+        _scale.BeginAnimation(ScaleTransform.ScaleYProperty, null);
+        _wheel.BeginAnimation(OpacityProperty, null);
+        _canvas.Children.Clear();
+        _wheel.Children.Clear();
+        _slices.Clear();
+        base.OnClosed(e);
     }
 
     /// <summary>
@@ -151,16 +162,13 @@ public sealed class RadialMenuWindow : Window
     {
         base.OnSourceInitialized(e);
 
-        var dpi = VisualTreeHelper.GetDpi(this);
-        _scaleXDpi = dpi.DpiScaleX;
-        _scaleYDpi = dpi.DpiScaleY;
+        NativeMethods.GetCursorPos(out var cursor);
+        NativeMethods.GetDpiForPoint(cursor, out _scaleXDpi, out _scaleYDpi);
 
         var rx = (int)Math.Round(WheelR * _scaleXDpi);
         var ry = (int)Math.Round(WheelR * _scaleYDpi);
 
-        NativeMethods.GetCursorPos(out var cursor);
-        var work = System.Windows.Forms.Screen
-            .FromPoint(new System.Drawing.Point(cursor.X, cursor.Y)).WorkingArea;
+        var work = NativeMethods.GetWorkingArea(cursor);
 
         _centerX = Clamp(cursor.X, work.Left + rx, work.Right - rx);
         _centerY = Clamp(cursor.Y, work.Top + ry, work.Bottom - ry);
@@ -175,6 +183,13 @@ public sealed class RadialMenuWindow : Window
         // layout pass can't quietly snap the window back to the Manual default of (0,0).
         Left = (_centerX - rx) / _scaleXDpi;
         Top = (_centerY - ry) / _scaleYDpi;
+    }
+
+    protected override void OnDpiChanged(DpiScale oldDpi, DpiScale newDpi)
+    {
+        base.OnDpiChanged(oldDpi, newDpi);
+        _scaleXDpi = newDpi.DpiScaleX;
+        _scaleYDpi = newDpi.DpiScaleY;
     }
 
     /// <summary>Clamps, tolerating a work area smaller than the wheel (then: centred).</summary>

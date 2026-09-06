@@ -16,7 +16,7 @@ public static class Ffmpeg
     private const int EncoderProbeTimeoutMs = 3_000;
     private const int StderrTailLength = 2 * 1024;
     private static readonly string[] HardwareH264Encoders =
-        ["h264_nvenc", "h264_amf", "h264_qsv"];
+        ["h264_nvenc", "h264_amf", "h264_qsv", "h264_mf"];
     private static readonly string? CachedExecutablePath = ResolveExecutablePath();
     private static readonly ConcurrentDictionary<(int Width, int Height), Lazy<string>> CachedH264Encoders = new();
 
@@ -193,11 +193,12 @@ public static class Ffmpeg
         out string failure)
     {
         var executable = ExecutablePath!;
+        var (preset, tune, extraArgs) = FfmpegArgs.GetDefaultTuning(encoder);
         using var process = new Process
         {
             StartInfo = CreateStartInfo(
                 executable,
-                FfmpegArgs.H264Probe(width, height, encoder),
+                FfmpegArgs.H264Probe(width, height, encoder, preset, tune, extraArgs),
                 redirectStdin: false,
                 redirectStdout: false),
         };

@@ -1,4 +1,5 @@
 using Reshot.Core.Diagnostics;
+using Reshot.Capture.Interop;
 
 namespace Reshot.Capture;
 
@@ -28,11 +29,15 @@ public sealed class ScreenCaptureService : IScreenCaptureService
 
     public CapturedFrame SnapshotAllMonitors()
     {
+        // Keep one monitor snapshot across the preferred backend and its fallback. Apart
+        // from avoiding duplicate user32 work, this makes both backends compose against
+        // the exact same virtual-desktop layout during one hotkey capture.
+        var monitors = CaptureNative.EnumerateMonitors();
         if (!_duplicationUnsupported)
         {
             try
             {
-                return DesktopDuplicationCapture.SnapshotAllMonitors();
+                return DesktopDuplicationCapture.SnapshotAllMonitors(monitors);
             }
             catch (NotSupportedException ex)
             {
@@ -47,7 +52,7 @@ public sealed class ScreenCaptureService : IScreenCaptureService
             }
         }
 
-        return _wgc.SnapshotAllMonitors();
+        return _wgc.SnapshotAllMonitors(monitors);
     }
 
     public WgcMonitorStream StartMonitorStream(int screenX, int screenY) =>

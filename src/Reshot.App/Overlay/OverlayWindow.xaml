@@ -599,7 +599,7 @@
         <Path x:Name="DimPath" IsHitTestVisible="False" />
 
         <!-- Editor canvas (brush strokes, shapes, text) + brush-size cursor. -->
-        <skia:SKElement x:Name="DrawSurface" IsHitTestVisible="False" />
+        <skia:SKElement x:Name="DrawSurface" Visibility="Collapsed" IsHitTestVisible="False" />
 
         <!-- Selection chrome: shape outline (arbitrary geometry) + resize handles. -->
         <Canvas x:Name="ChromeLayer" IsHitTestVisible="False">

@@ -12,22 +12,25 @@ namespace Reshot.Core.Document;
 /// </summary>
 public sealed class CaptureDocument : IDisposable
 {
-    private readonly SKCanvas _paintCanvas;
-    private readonly SKCanvas _effectsCanvas;
-    private readonly SKCanvas _absoluteCanvas;
+    private SKBitmap? _paintLayer;
+    private SKBitmap? _effectsLayer;
+    private SKBitmap? _absoluteMask;
+    private SKCanvas? _paintCanvas;
+    private SKCanvas? _effectsCanvas;
+    private SKCanvas? _absoluteCanvas;
     private bool _disposed;
 
     public int Width { get; }
     public int Height { get; }
 
     /// <summary>Blur/pixelize results over the base, transparent where untouched.</summary>
-    public SKBitmap EffectsLayer { get; }
+    public SKBitmap EffectsLayer => EnsureEffectsLayer();
 
     /// <summary>Permanent brush strokes and rasterized shapes/text, transparent where nothing was drawn.</summary>
-    public SKBitmap PaintLayer { get; }
+    public SKBitmap PaintLayer => EnsurePaintLayer();
 
     /// <summary>Coverage of the Absolute Eraser (opaque = punch to transparency on export).</summary>
-    public SKBitmap AbsoluteMask { get; }
+    public SKBitmap AbsoluteMask => EnsureAbsoluteMask();
 
     public bool HasPaint { get; private set; }
     public bool HasEffects { get; private set; }
@@ -37,32 +40,61 @@ public sealed class CaptureDocument : IDisposable
     {
         Width = width;
         Height = height;
-
-        PaintLayer = NewLayer(width, height);
-        EffectsLayer = NewLayer(width, height);
-        AbsoluteMask = NewLayer(width, height);
-
-        _paintCanvas = new SKCanvas(PaintLayer);
-        _effectsCanvas = new SKCanvas(EffectsLayer);
-        _absoluteCanvas = new SKCanvas(AbsoluteMask);
     }
 
     private static SKBitmap NewLayer(int w, int h)
     {
-        var bmp = new SKBitmap(new SKImageInfo(w, h, SKColorType.Bgra8888, SKAlphaType.Premul));
-        bmp.Erase(SKColors.Transparent);
-        return bmp;
+        // Skia allocates zero-filled pixel memory, so a fresh premultiplied bitmap is already
+        // transparent. Avoiding an explicit erase saves a full-frame memset on every layer.
+        return new SKBitmap(new SKImageInfo(w, h, SKColorType.Bgra8888, SKAlphaType.Premul));
+    }
+
+    private SKBitmap EnsureLayer(ref SKBitmap? layer, ref SKCanvas? canvas)
+    {
+        ObjectDisposedException.ThrowIf(_disposed, this);
+        if (layer is null)
+        {
+            layer = NewLayer(Width, Height);
+            canvas = new SKCanvas(layer);
+        }
+
+        return layer;
+    }
+
+    private SKBitmap EnsurePaintLayer() => EnsureLayer(ref _paintLayer, ref _paintCanvas);
+
+    private SKBitmap EnsureEffectsLayer() => EnsureLayer(ref _effectsLayer, ref _effectsCanvas);
+
+    private SKBitmap EnsureAbsoluteMask() => EnsureLayer(ref _absoluteMask, ref _absoluteCanvas);
+
+    private SKCanvas EnsurePaintCanvas()
+    {
+        EnsurePaintLayer();
+        return _paintCanvas!;
+    }
+
+    private SKCanvas EnsureEffectsCanvas()
+    {
+        EnsureEffectsLayer();
+        return _effectsCanvas!;
+    }
+
+    private SKCanvas EnsureAbsoluteCanvas()
+    {
+        EnsureAbsoluteMask();
+        return _absoluteCanvas!;
     }
 
     // ---- Brush -----------------------------------------------------------------
 
     public void CommitStroke(SKPath stroke, SKPaint paint, SKPath? clip)
     {
-        _paintCanvas.Save();
+        var canvas = EnsurePaintCanvas();
+        canvas.Save();
         if (clip is not null)
-            _paintCanvas.ClipPath(clip, antialias: true);
-        _paintCanvas.DrawPath(stroke, paint);
-        _paintCanvas.Restore();
+            canvas.ClipPath(clip, antialias: true);
+        canvas.DrawPath(stroke, paint);
+        canvas.Restore();
         HasPaint = true;
     }
 
@@ -73,11 +105,12 @@ public sealed class CaptureDocument : IDisposable
     /// </summary>
     public void CommitVector(VectorObject v, SKPath? clip)
     {
-        _paintCanvas.Save();
+        var canvas = EnsurePaintCanvas();
+        canvas.Save();
         if (clip is not null)
-            _paintCanvas.ClipPath(clip, antialias: true);
-        v.Draw(_paintCanvas);
-        _paintCanvas.Restore();
+            canvas.ClipPath(clip, antialias: true);
+        v.Draw(canvas);
+        canvas.Restore();
         HasPaint = true;
     }
 
@@ -86,33 +119,35 @@ public sealed class CaptureDocument : IDisposable
     /// <summary>Stamps effect-source pixels (blurred/pixelized base) into the area.</summary>
     public void ApplyEffect(SKBitmap source, SKPath area, SKPath? selectionClip)
     {
-        _effectsCanvas.Save();
+        var canvas = EnsureEffectsCanvas();
+        canvas.Save();
         if (selectionClip is not null)
-            _effectsCanvas.ClipPath(selectionClip, antialias: true);
-        _effectsCanvas.ClipPath(area, antialias: true);
-        _effectsCanvas.DrawBitmap(source, 0, 0);
-        _effectsCanvas.Restore();
+            canvas.ClipPath(selectionClip, antialias: true);
+        canvas.ClipPath(area, antialias: true);
+        canvas.DrawBitmap(source, 0, 0);
+        canvas.Restore();
         HasEffects = true;
     }
 
     /// <summary>Filter Eraser: clears the effects layer in the area (returns the original).</summary>
     public void EraseEffects(SKPath area, SKPath? selectionClip) =>
-        ClearArea(_effectsCanvas, area, selectionClip);
+        ClearArea(EnsureEffectsCanvas(), area, selectionClip);
 
     /// <summary>Eraser: clears painted pixels in the area.</summary>
     public void ErasePaint(SKPath area, SKPath? selectionClip) =>
-        ClearArea(_paintCanvas, area, selectionClip);
+        ClearArea(EnsurePaintCanvas(), area, selectionClip);
 
     /// <summary>Absolute Eraser: marks the area to be punched to transparency on export.</summary>
     public void AbsoluteErase(SKPath area, SKPath? selectionClip)
     {
-        _absoluteCanvas.Save();
+        var canvas = EnsureAbsoluteCanvas();
+        canvas.Save();
         if (selectionClip is not null)
-            _absoluteCanvas.ClipPath(selectionClip, antialias: true);
-        _absoluteCanvas.ClipPath(area, antialias: true);
+            canvas.ClipPath(selectionClip, antialias: true);
+        canvas.ClipPath(area, antialias: true);
         using var paint = new SKPaint { Color = SKColors.White };
-        _absoluteCanvas.DrawPaint(paint); // DrawPaint respects the clip (Clear does not)
-        _absoluteCanvas.Restore();
+        canvas.DrawPaint(paint); // DrawPaint respects the clip (Clear does not)
+        canvas.Restore();
         HasAbsolute = true;
     }
 
@@ -145,16 +180,16 @@ public sealed class CaptureDocument : IDisposable
 
     /// <summary>Eraser: removes painted pixels by the coverage strength (soft edge).</summary>
     public void ErasePaintCoverage(SKBitmap coverage, int dx, int dy, SKPath? selectionClip) =>
-        ApplyCoverage(_paintCanvas, coverage, dx, dy, selectionClip, SKBlendMode.DstOut);
+        ApplyCoverage(EnsurePaintCanvas(), coverage, dx, dy, selectionClip, SKBlendMode.DstOut);
 
     /// <summary>Filter Eraser: removes effect pixels by the coverage strength (soft edge).</summary>
     public void EraseEffectsCoverage(SKBitmap coverage, int dx, int dy, SKPath? selectionClip) =>
-        ApplyCoverage(_effectsCanvas, coverage, dx, dy, selectionClip, SKBlendMode.DstOut);
+        ApplyCoverage(EnsureEffectsCanvas(), coverage, dx, dy, selectionClip, SKBlendMode.DstOut);
 
     /// <summary>Absolute Eraser: accumulates coverage into the punch-through mask (soft edge).</summary>
     public void AbsoluteEraseCoverage(SKBitmap coverage, int dx, int dy, SKPath? selectionClip)
     {
-        ApplyCoverage(_absoluteCanvas, coverage, dx, dy, selectionClip, SKBlendMode.SrcOver);
+        ApplyCoverage(EnsureAbsoluteCanvas(), coverage, dx, dy, selectionClip, SKBlendMode.SrcOver);
         HasAbsolute = true;
     }
 
@@ -175,26 +210,54 @@ public sealed class CaptureDocument : IDisposable
     /// <summary>Copies a rectangular region of a layer for an undo snapshot.</summary>
     public static SKBitmap SnapshotRegion(SKBitmap layer, SKRectI region)
     {
-        var snap = new SKBitmap(new SKImageInfo(region.Width, region.Height, SKColorType.Bgra8888, SKAlphaType.Premul));
+        var clipped = ClipRegion(layer, region);
+        var width = Math.Max(1, clipped.Width);
+        var height = Math.Max(1, clipped.Height);
+        var snap = new SKBitmap(new SKImageInfo(width, height, SKColorType.Bgra8888, SKAlphaType.Premul));
         using var canvas = new SKCanvas(snap);
         canvas.Clear(SKColors.Transparent);
-        canvas.DrawBitmap(
-            layer,
-            SKRect.Create(region.Left, region.Top, region.Width, region.Height),
-            SKRect.Create(0, 0, region.Width, region.Height));
+        if (!clipped.IsEmpty)
+        {
+            canvas.DrawBitmap(
+                layer,
+                SKRect.Create(clipped.Left, clipped.Top, clipped.Width, clipped.Height),
+                SKRect.Create(0, 0, clipped.Width, clipped.Height));
+        }
         return snap;
     }
 
     /// <summary>Overwrites a region of a layer with a snapshot (undo/redo).</summary>
     public static void RestoreRegion(SKBitmap layer, SKRectI region, SKBitmap snapshot)
     {
+        var clipped = ClipRegion(layer, region);
+        if (clipped.IsEmpty)
+            return;
+
         using var canvas = new SKCanvas(layer);
         using var paint = new SKPaint { BlendMode = SKBlendMode.Src };
+        var sourceX = snapshot.Width == region.Width ? clipped.Left - region.Left : 0;
+        var sourceY = snapshot.Height == region.Height ? clipped.Top - region.Top : 0;
+        var width = Math.Min(clipped.Width, snapshot.Width - sourceX);
+        var height = Math.Min(clipped.Height, snapshot.Height - sourceY);
+        if (width <= 0 || height <= 0)
+            return;
         canvas.DrawBitmap(
             snapshot,
-            SKRect.Create(0, 0, region.Width, region.Height),
-            SKRect.Create(region.Left, region.Top, region.Width, region.Height),
+            SKRect.Create(sourceX, sourceY, width, height),
+            SKRect.Create(clipped.Left, clipped.Top,
+                width, height),
             paint);
+    }
+
+    private static SKRectI ClipRegion(SKBitmap layer, SKRectI region)
+    {
+        var left = Math.Clamp(region.Left, 0, layer.Width);
+        var top = Math.Clamp(region.Top, 0, layer.Height);
+        var right = Math.Clamp(region.Right, 0, layer.Width);
+        var bottom = Math.Clamp(region.Bottom, 0, layer.Height);
+        return right > left && bottom > top
+            ? new SKRectI(left, top, right, bottom)
+            : SKRectI.Empty;
     }
 
     // ---- Composition -----------------------------------------------------------
@@ -211,13 +274,15 @@ public sealed class CaptureDocument : IDisposable
         using var canvas = new SKCanvas(bmp);
         canvas.Clear(SKColors.Transparent);
         canvas.DrawBitmap(baseBitmap, 0, 0);
-        canvas.DrawBitmap(EffectsLayer, 0, 0);
-        canvas.DrawBitmap(PaintLayer, 0, 0);
+        if (_effectsLayer is not null)
+            canvas.DrawBitmap(_effectsLayer, 0, 0);
+        if (_paintLayer is not null)
+            canvas.DrawBitmap(_paintLayer, 0, 0);
 
-        if (HasAbsolute)
+        if (HasAbsolute && _absoluteMask is not null)
         {
             using var punch = new SKPaint { BlendMode = SKBlendMode.DstOut };
-            canvas.DrawBitmap(AbsoluteMask, 0, 0, punch);
+            canvas.DrawBitmap(_absoluteMask, 0, 0, punch);
         }
         return bmp;
     }
@@ -232,8 +297,10 @@ public sealed class CaptureDocument : IDisposable
         var bmp = new SKBitmap(new SKImageInfo(Width, Height, SKColorType.Bgra8888, SKAlphaType.Premul));
         using var canvas = new SKCanvas(bmp);
         canvas.Clear(SKColors.Transparent);
-        canvas.DrawBitmap(EffectsLayer, 0, 0);
-        canvas.DrawBitmap(PaintLayer, 0, 0);
+        if (_effectsLayer is not null)
+            canvas.DrawBitmap(_effectsLayer, 0, 0);
+        if (_paintLayer is not null)
+            canvas.DrawBitmap(_paintLayer, 0, 0);
         return bmp;
     }
 
@@ -242,11 +309,11 @@ public sealed class CaptureDocument : IDisposable
         if (_disposed)
             return;
         _disposed = true;
-        _paintCanvas.Dispose();
-        _effectsCanvas.Dispose();
-        _absoluteCanvas.Dispose();
-        PaintLayer.Dispose();
-        EffectsLayer.Dispose();
-        AbsoluteMask.Dispose();
+        _paintCanvas?.Dispose();
+        _effectsCanvas?.Dispose();
+        _absoluteCanvas?.Dispose();
+        _paintLayer?.Dispose();
+        _effectsLayer?.Dispose();
+        _absoluteMask?.Dispose();
     }
 }

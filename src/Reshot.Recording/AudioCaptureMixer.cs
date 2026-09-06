@@ -103,21 +103,29 @@ public sealed class AudioCaptureMixer : IDisposable
     }
 
     /// <summary>Reads <paramref name="frames"/> mixed frames as 16-bit interleaved PCM; returns bytes written.</summary>
-    public int ReadPcm16(byte[] dest, int frames)
+    public unsafe int ReadPcm16(byte[] dest, int frames)
     {
+        ArgumentNullException.ThrowIfNull(dest);
+        if (frames <= 0)
+            return 0;
+
         var samples = frames * Channels;
         if (_scratch.Length < samples)
             _scratch = new float[samples];
 
         var read = _mixer.Read(_scratch, 0, samples);
-        var bytes = 0;
-        for (var i = 0; i < read; i++)
+        var maxSamples = Math.Min(read, dest.Length / 2);
+
+        fixed (float* pScratch = _scratch)
+        fixed (byte* pDest = dest)
         {
-            var v = (int)(Math.Clamp(_scratch[i], -1f, 1f) * short.MaxValue);
-            dest[bytes++] = (byte)(v & 0xFF);
-            dest[bytes++] = (byte)((v >> 8) & 0xFF);
+            var pOut = (short*)pDest;
+            for (var i = 0; i < maxSamples; i++)
+            {
+                pOut[i] = (short)(Math.Clamp(pScratch[i], -1f, 1f) * short.MaxValue);
+            }
         }
-        return bytes;
+        return maxSamples * 2;
     }
 
     public void Dispose()

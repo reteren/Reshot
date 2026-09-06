@@ -48,6 +48,10 @@ internal static class DesktopDuplicationCapture
     /// can fall back. Throwing is a normal outcome here, not a bug.
     /// </summary>
     public static CapturedFrame SnapshotAllMonitors()
+        => SnapshotAllMonitors(CaptureNative.EnumerateMonitors());
+
+    internal static CapturedFrame SnapshotAllMonitors(
+        IReadOnlyList<CaptureNative.MonitorHandle> monitors)
     {
         var vLeft = CaptureNative.GetSystemMetrics(CaptureNative.SM_XVIRTUALSCREEN);
         var vTop = CaptureNative.GetSystemMetrics(CaptureNative.SM_YVIRTUALSCREEN);
@@ -57,11 +61,11 @@ internal static class DesktopDuplicationCapture
         // The monitor list stays the OS one: it carries which display is primary, and it is
         // what the overlay's coordinates are built from. Duplication outputs are matched
         // into it, never used in its place.
-        var monitors = CaptureNative.EnumerateMonitors();
         if (monitors.Count == 0)
             throw new InvalidOperationException("No monitors found to capture.");
 
-        var buffer = new byte[(long)vWidth * vHeight * 4];
+        using var bufferLease = CapturedFrame.RentBuffer(checked(vWidth * vHeight * 4));
+        var buffer = bufferLease.Buffer;
         var captured = new bool[monitors.Count];
 
         D3D11CreateDevice(
@@ -115,18 +119,15 @@ internal static class DesktopDuplicationCapture
         Log.Info($"Capture: {monitors.Count} monitor(s) via Desktop Duplication → " +
                  $"{vWidth}x{vHeight} virtual desktop @ ({vLeft},{vTop}).");
 
-        return new CapturedFrame
-        {
-            PixelsBgra = buffer,
-            Width = vWidth,
-            Height = vHeight,
-            VirtualLeft = vLeft,
-            VirtualTop = vTop,
-            Monitors = monitors
+        return bufferLease.CreateFrame(
+            vWidth,
+            vHeight,
+            vLeft,
+            vTop,
+            monitors
                 .Select(m => new CapturedMonitor(
                     m.Bounds.Left, m.Bounds.Top, m.Bounds.Width, m.Bounds.Height, m.IsPrimary))
-                .ToList(),
-        };
+                .ToList());
     }
 
     private static int IndexOfMonitorAt(
@@ -255,12 +256,15 @@ internal static class DesktopDuplicationCapture
             var offsetY = monitor.Bounds.Top - vTop;
             var rowBytes = monitor.Bounds.Width * 4;
 
-            for (var y = 0; y < monitor.Bounds.Height; y++)
-            {
-                IntPtr src = map.DataPointer + y * (int)map.RowPitch;
-                var destIndex = ((offsetY + y) * vWidth + offsetX) * 4;
-                Marshal.Copy(src, buffer, destIndex, rowBytes);
-            }
+            var destinationOffset = (offsetY * vWidth + offsetX) * 4;
+            CaptureNative.CopyMappedRows(
+                map.DataPointer,
+                checked((int)map.RowPitch),
+                buffer,
+                destinationOffset,
+                vWidth * 4,
+                rowBytes,
+                monitor.Bounds.Height);
         }
         finally
         {

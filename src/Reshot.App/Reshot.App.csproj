@@ -6,15 +6,22 @@
     <TargetFramework>net8.0-windows10.0.22621.0</TargetFramework>
     <SupportedOSPlatformVersion>10.0.19041.0</SupportedOSPlatformVersion>
     <UseWPF>true</UseWPF>
-    <!-- WinForms is enabled only for the tray NotifyIcon + runtime icon drawing. -->
-    <UseWindowsForms>true</UseWindowsForms>
     <RootNamespace>Reshot.App</RootNamespace>
     <AssemblyName>reshot</AssemblyName>
     <ApplicationManifest>app.manifest</ApplicationManifest>
     <ApplicationIcon>Assets\reshot.ico</ApplicationIcon>
-    <!-- DPI awareness is declared in app.manifest (WPF-first app; WinForms is only
-         used for the tray NotifyIcon). Suppress the WinForms high-DPI analyzer. -->
-    <NoWarn>$(NoWarn);WFAC010</NoWarn>
+
+    <!-- Runtime & GC configuration:
+         Workstation Concurrent GC prevents inheriting Server GC (+30MB idle private commit),
+         RetainVM=false releases unused decommitted memory pages back to Windows.
+         Tiered compilation and QuickJit minimize startup latency. -->
+    <ServerGarbageCollection>false</ServerGarbageCollection>
+    <ConcurrentGarbageCollection>true</ConcurrentGarbageCollection>
+    <RetainVMGarbageCollection>false</RetainVMGarbageCollection>
+    <TieredCompilation>true</TieredCompilation>
+    <TieredCompilationQuickJit>true</TieredCompilationQuickJit>
+    <TieredCompilationQuickJitForLoops>true</TieredCompilationQuickJitForLoops>
+    <TieredPGO>true</TieredPGO>
   </PropertyGroup>
 
   <ItemGroup>

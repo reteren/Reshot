@@ -20,6 +20,13 @@ public enum VectorKind
 /// </summary>
 public sealed class VectorObject
 {
+    private string? _cachedBoundsText;
+    private string? _cachedBoundsFontFamily;
+    private float _cachedBoundsFontSize;
+    private float _cachedTextWidth;
+    private float _cachedTextHeight;
+    private bool _hasCachedTextBounds;
+
     public VectorKind Kind { get; set; }
     public SKRect Bounds { get; set; }      // circle / square / triangle
     public SKPoint P1 { get; set; }         // line / arrow start, or text origin
@@ -161,7 +168,16 @@ public sealed class VectorObject
     /// </summary>
     private SKRect ComputeTextBounds()
     {
-        var lines = (Text ?? string.Empty).Split('\n');
+        var text = Text ?? string.Empty;
+        if (_hasCachedTextBounds
+            && string.Equals(_cachedBoundsText, text, StringComparison.Ordinal)
+            && string.Equals(_cachedBoundsFontFamily, FontFamily, StringComparison.Ordinal)
+            && _cachedBoundsFontSize == FontSize)
+        {
+            return SKRect.Create(P1.X, P1.Y, _cachedTextWidth, _cachedTextHeight);
+        }
+
+        var lines = text.Split('\n');
 
         using var paint = new SKPaint
         {
@@ -179,6 +195,12 @@ public sealed class VectorObject
         // DrawText places the first baseline at P1.Y - Ascent, so P1 is the top-left of the box.
         // The floor keeps an empty or whitespace-only object grabbable.
         var floor = FontSize * 0.25f;
-        return SKRect.Create(P1.X, P1.Y, Math.Max(width, floor), Math.Max(height, floor));
+        _cachedBoundsText = text;
+        _cachedBoundsFontFamily = FontFamily;
+        _cachedBoundsFontSize = FontSize;
+        _cachedTextWidth = Math.Max(width, floor);
+        _cachedTextHeight = Math.Max(height, floor);
+        _hasCachedTextBounds = true;
+        return SKRect.Create(P1.X, P1.Y, _cachedTextWidth, _cachedTextHeight);
     }
 }

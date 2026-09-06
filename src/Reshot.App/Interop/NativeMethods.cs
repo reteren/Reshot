@@ -65,6 +65,12 @@ internal static class NativeMethods
     {
         public int X;
         public int Y;
+
+        public POINT(int x, int y)
+        {
+            X = x;
+            Y = y;
+        }
     }
 
     [StructLayout(LayoutKind.Sequential)]
@@ -74,6 +80,11 @@ internal static class NativeMethods
         public int Top;
         public int Right;
         public int Bottom;
+
+        public int X => Left;
+        public int Y => Top;
+        public int Width => Right - Left;
+        public int Height => Bottom - Top;
     }
 
     [DllImport("user32.dll")]
@@ -83,6 +94,147 @@ internal static class NativeMethods
     [DllImport("user32.dll")]
     [return: MarshalAs(UnmanagedType.Bool)]
     public static extern bool GetWindowRect(IntPtr hWnd, out RECT lpRect);
+
+    [DllImport("user32.dll")]
+    public static extern IntPtr MonitorFromWindow(IntPtr hwnd, uint dwFlags);
+
+    [DllImport("user32.dll")]
+    public static extern IntPtr MonitorFromPoint(POINT pt, uint dwFlags);
+
+    public const uint MONITOR_DEFAULTTONEAREST = 2;
+
+    [StructLayout(LayoutKind.Sequential)]
+    public struct MONITORINFO
+    {
+        public int cbSize;
+        public RECT rcMonitor;
+        public RECT rcWork;
+        public uint dwFlags;
+    }
+
+    [DllImport("user32.dll")]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    public static extern bool GetMonitorInfo(IntPtr hMonitor, ref MONITORINFO lpmi);
+
+    [DllImport("shcore.dll")]
+    private static extern int GetDpiForMonitor(
+        IntPtr hmonitor,
+        int dpiType,
+        out uint dpiX,
+        out uint dpiY);
+
+    private const int MDT_EFFECTIVE_DPI = 0;
+
+    /// <summary>
+    /// Returns the DPI scale factors (e.g. 1.0 for 100%, 1.5 for 150%) for the monitor
+    /// containing the specified physical point.
+    /// </summary>
+    public static void GetDpiForPoint(POINT pt, out double dpiScaleX, out double dpiScaleY)
+    {
+        dpiScaleX = 1.0;
+        dpiScaleY = 1.0;
+
+        var hMon = MonitorFromPoint(pt, MONITOR_DEFAULTTONEAREST);
+        if (hMon != IntPtr.Zero)
+        {
+            try
+            {
+                if (GetDpiForMonitor(hMon, MDT_EFFECTIVE_DPI, out var dpiX, out var dpiY) == 0 &&
+                    dpiX > 0 && dpiY > 0)
+                {
+                    dpiScaleX = dpiX / 96.0;
+                    dpiScaleY = dpiY / 96.0;
+                }
+            }
+            catch
+            {
+                // Fall back to 1.0
+            }
+        }
+    }
+
+    /// <summary>
+    /// Returns the DPI scale factors for the specified monitor handle.
+    /// </summary>
+    public static void GetDpiForMonitor(IntPtr hMonitor, out double dpiScaleX, out double dpiScaleY)
+    {
+        dpiScaleX = 1.0;
+        dpiScaleY = 1.0;
+
+        if (hMonitor != IntPtr.Zero)
+        {
+            try
+            {
+                if (GetDpiForMonitor(hMonitor, MDT_EFFECTIVE_DPI, out var dpiX, out var dpiY) == 0 &&
+                    dpiX > 0 && dpiY > 0)
+                {
+                    dpiScaleX = dpiX / 96.0;
+                    dpiScaleY = dpiY / 96.0;
+                }
+            }
+            catch
+            {
+                // Fall back to 1.0
+            }
+        }
+    }
+
+    [DllImport("user32.dll")]
+    public static extern int GetSystemMetrics(int nIndex);
+
+    public const int SM_CXSCREEN = 0;
+    public const int SM_CYSCREEN = 1;
+    public const int SM_CXSMICON = 49;
+    public const int SM_CYSMICON = 50;
+
+    /// <summary>Returns the bounds (in physical pixels) of the primary monitor.</summary>
+    public static RECT GetPrimaryMonitorBounds()
+    {
+        var pt = new POINT(0, 0);
+        var hMon = MonitorFromPoint(pt, MONITOR_DEFAULTTONEAREST);
+        if (hMon != IntPtr.Zero)
+        {
+            var mi = new MONITORINFO { cbSize = Marshal.SizeOf<MONITORINFO>() };
+            if (GetMonitorInfo(hMon, ref mi))
+                return mi.rcMonitor;
+        }
+
+        return new RECT
+        {
+            Left = 0,
+            Top = 0,
+            Right = GetSystemMetrics(SM_CXSCREEN),
+            Bottom = GetSystemMetrics(SM_CYSCREEN)
+        };
+    }
+
+    /// <summary>Returns the work area (excluding taskbar) of the monitor containing the specified point.</summary>
+    public static RECT GetWorkingArea(POINT pt)
+    {
+        var hMon = MonitorFromPoint(pt, MONITOR_DEFAULTTONEAREST);
+        if (hMon != IntPtr.Zero)
+        {
+            var mi = new MONITORINFO { cbSize = Marshal.SizeOf<MONITORINFO>() };
+            if (GetMonitorInfo(hMon, ref mi))
+                return mi.rcWork;
+        }
+
+        return GetPrimaryMonitorBounds();
+    }
+
+    /// <summary>Returns the bounds of the monitor containing the specified point.</summary>
+    public static RECT GetMonitorBounds(POINT pt)
+    {
+        var hMon = MonitorFromPoint(pt, MONITOR_DEFAULTTONEAREST);
+        if (hMon != IntPtr.Zero)
+        {
+            var mi = new MONITORINFO { cbSize = Marshal.SizeOf<MONITORINFO>() };
+            if (GetMonitorInfo(hMon, ref mi))
+                return mi.rcMonitor;
+        }
+
+        return GetPrimaryMonitorBounds();
+    }
 
     /// <summary>
     /// Whether the foreground window belongs to another process and covers its entire
@@ -108,9 +260,16 @@ internal static class NativeMethods
 
         // Screen bounds, not the work area: a maximised window stops at the taskbar,
         // a game does not. That difference is the whole test.
-        var screen = System.Windows.Forms.Screen.FromHandle(foreground).Bounds;
-        return rect.Left <= screen.Left && rect.Top <= screen.Top &&
-               rect.Right >= screen.Right && rect.Bottom >= screen.Bottom;
+        var hMonitor = MonitorFromWindow(foreground, MONITOR_DEFAULTTONEAREST);
+        if (hMonitor == IntPtr.Zero)
+            return false;
+
+        var mi = new MONITORINFO { cbSize = Marshal.SizeOf<MONITORINFO>() };
+        if (!GetMonitorInfo(hMonitor, ref mi))
+            return false;
+
+        return rect.Left <= mi.rcMonitor.Left && rect.Top <= mi.rcMonitor.Top &&
+               rect.Right >= mi.rcMonitor.Right && rect.Bottom >= mi.rcMonitor.Bottom;
     }
 
     /// <summary>
@@ -253,6 +412,19 @@ internal static class NativeMethods
         return GetForegroundWindow() == hwnd;
     }
 
+    [DllImport("kernel32.dll", SetLastError = true)]
+    private static extern IntPtr OpenProcess(uint processAccess, bool bInheritHandle, uint processId);
+
+    private const uint PROCESS_QUERY_LIMITED_INFORMATION = 0x1000;
+
+    [DllImport("kernel32.dll", SetLastError = true, CharSet = CharSet.Unicode)]
+    private static extern bool QueryFullProcessImageName(
+        IntPtr hProcess, uint dwFlags, [Out] System.Text.StringBuilder lpExeName, ref uint lpdwSize);
+
+    [DllImport("kernel32.dll", SetLastError = true)]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    private static extern bool CloseHandle(IntPtr hObject);
+
     /// <summary>Names the window that currently holds the foreground, for the log.</summary>
     public static string DescribeForegroundWindow()
     {
@@ -261,6 +433,26 @@ internal static class NativeMethods
             return "none";
 
         GetWindowThreadProcessId(hwnd, out var pid);
+
+        var hProc = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, false, pid);
+        if (hProc != IntPtr.Zero)
+        {
+            try
+            {
+                var sb = new System.Text.StringBuilder(260);
+                uint size = (uint)sb.Capacity;
+                if (QueryFullProcessImageName(hProc, 0, sb, ref size))
+                {
+                    var name = System.IO.Path.GetFileNameWithoutExtension(sb.ToString());
+                    return $"{name} (hwnd 0x{hwnd.ToInt64():X})";
+                }
+            }
+            finally
+            {
+                CloseHandle(hProc);
+            }
+        }
+
         try
         {
             using var process = System.Diagnostics.Process.GetProcessById((int)pid);

@@ -131,6 +131,8 @@ public partial class OverlayWindow : Window
     private SKPoint _cursorPhysical;
     private bool _brushCursorVisible;
 
+    private bool _drawRefreshQueued;
+
     // HSV picker state.
     private double _hue;   // 0..360
     private double _sat;   // 0..1
@@ -1364,19 +1366,21 @@ public partial class OverlayWindow : Window
                         var src = EffectSource();
                         ApplyRegionOp(_document.EffectsLayer, region, () => _document.ApplyEffect(src, area, _strokeClip));
                         break;
-                    case DrawSubTool.FilterEraser:
+                    case DrawSubTool.FilterEraser when _document.HasEffects:
                     {
+                        // Do not materialise an untouched effects layer for a no-op erase.
                         using var cov = BuildEraseCoverage(region);
                         ApplyRegionOp(_document.EffectsLayer, region,
                             () => _document.EraseEffectsCoverage(cov, region.Left, region.Top, _strokeClip));
                         break;
                     }
-                    case DrawSubTool.Eraser:
+                    case DrawSubTool.Eraser when _document.HasPaint:
                     {
                         // Shapes/text are baked into the paint layer, so clearing paint
                         // pixels erases them by touch, no whole-object removal, and the
                         // effects layer is deliberately left untouched (that is the
                         // Filter Eraser's job). Global opacity + Hardness shape the erase.
+                        // Do not materialise an untouched paint layer for a no-op erase.
                         using var cov = BuildEraseCoverage(region);
                         ApplyRegionOp(_document.PaintLayer, region,
                             () => _document.ErasePaintCoverage(cov, region.Left, region.Top, _strokeClip));
@@ -1651,7 +1655,45 @@ public partial class OverlayWindow : Window
 
     private void HideOcrHint() => OcrHint.Visibility = Visibility.Collapsed;
 
-    private void RefreshDrawSurface() => DrawSurface.InvalidateVisual();
+    private bool ShouldRenderDrawSurface =>
+        _document?.HasPaint == true ||
+        _document?.HasEffects == true ||
+        _document?.HasAbsolute == true ||
+        _stroke is not null ||
+        _vectorPreview is not null ||
+        _effectStroke is not null ||
+        _textEditing is not null ||
+        (_tool == ToolMode.Draw && _brushCursorVisible && !_eyedropping && !_eyedropperArmed) ||
+        _ocr?.HasWords == true;
+
+    private void UpdateDrawSurfaceVisibility()
+    {
+        var visibility = ShouldRenderDrawSurface ? Visibility.Visible : Visibility.Collapsed;
+        if (DrawSurface.Visibility != visibility)
+            DrawSurface.Visibility = visibility;
+    }
+
+    // Mouse input can request the same full-frame raster more than once before WPF
+    // reaches its render pass; defer one invalidation so that burst collapses here.
+    private void RefreshDrawSurface()
+    {
+        UpdateDrawSurfaceVisibility();
+        if (DrawSurface.Visibility != Visibility.Visible)
+            return;
+
+        if (_drawRefreshQueued || Dispatcher.HasShutdownStarted || Dispatcher.HasShutdownFinished)
+            return;
+
+        _drawRefreshQueued = true;
+        Dispatcher.BeginInvoke(DispatcherPriority.Render, new Action(() =>
+        {
+            _drawRefreshQueued = false;
+            UpdateDrawSurfaceVisibility();
+            if (DrawSurface.Visibility == Visibility.Visible &&
+                !Dispatcher.HasShutdownStarted && !Dispatcher.HasShutdownFinished)
+                DrawSurface.InvalidateVisual();
+        }));
+    }
 
     private void OnPaintSurface(object? sender, SKPaintSurfaceEventArgs e)
     {
@@ -3674,6 +3716,9 @@ public partial class OverlayWindow : Window
 
     protected override void OnClosed(EventArgs e)
     {
+        FrameView.Source = null;
+        _frameBitmap = null;
+        _history.Dispose();
         _document?.Dispose();
         _strokeClip?.Dispose();
         _effectStroke?.Dispose();

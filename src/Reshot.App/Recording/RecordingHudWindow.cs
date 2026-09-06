@@ -43,6 +43,7 @@ public sealed class RecordingHudWindow : Window
     private readonly TextBlock _label;
     private readonly string _resolution;
     private bool _blink;
+    private int _lastSecond = -1;
 
     public RecordingHudWindow(
         Int32Rect recordRect, string resolution,
@@ -123,6 +124,10 @@ public sealed class RecordingHudWindow : Window
     private void UpdateLabel()
     {
         var t = DateTime.Now - _start;
+        var totalSec = (int)t.TotalSeconds;
+        if (totalSec == _lastSecond)
+            return;
+        _lastSecond = totalSec;
         _label.Text = $"REC  {(int)t.TotalMinutes:00}:{t.Seconds:00}   ·   {_resolution}";
     }
 

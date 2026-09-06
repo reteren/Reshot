@@ -39,6 +39,10 @@ public sealed class WgcScreenCaptureService : IScreenCaptureService
     };
 
     public CapturedFrame SnapshotAllMonitors()
+        => SnapshotAllMonitors(CaptureNative.EnumerateMonitors());
+
+    internal CapturedFrame SnapshotAllMonitors(
+        IReadOnlyList<CaptureNative.MonitorHandle> monitors)
     {
         if (!GraphicsCaptureSession.IsSupported())
             throw new NotSupportedException("Windows.Graphics.Capture is not supported on this system.");
@@ -48,11 +52,11 @@ public sealed class WgcScreenCaptureService : IScreenCaptureService
         var vWidth = CaptureNative.GetSystemMetrics(CaptureNative.SM_CXVIRTUALSCREEN);
         var vHeight = CaptureNative.GetSystemMetrics(CaptureNative.SM_CYVIRTUALSCREEN);
 
-        var monitors = CaptureNative.EnumerateMonitors();
         if (monitors.Count == 0)
             throw new InvalidOperationException("No monitors found to capture.");
 
-        var buffer = new byte[(long)vWidth * vHeight * 4];
+        using var bufferLease = CapturedFrame.RentBuffer(checked(vWidth * vHeight * 4));
+        var buffer = bufferLease.Buffer;
         var capturedMonitors = new List<CapturedMonitor>(monitors.Count);
 
         // Remember the game HWND *before* we start capturing — exclusive-fullscreen
@@ -103,15 +107,7 @@ public sealed class WgcScreenCaptureService : IScreenCaptureService
 
         Log.Info($"Capture: {monitors.Count} monitor(s) → {vWidth}x{vHeight} virtual desktop @ ({vLeft},{vTop}).");
 
-        return new CapturedFrame
-        {
-            PixelsBgra = buffer,
-            Width = vWidth,
-            Height = vHeight,
-            VirtualLeft = vLeft,
-            VirtualTop = vTop,
-            Monitors = capturedMonitors,
-        };
+        return bufferLease.CreateFrame(vWidth, vHeight, vLeft, vTop, capturedMonitors);
     }
 
     public WgcMonitorStream StartMonitorStream(int screenX, int screenY)
@@ -167,9 +163,9 @@ public sealed class WgcScreenCaptureService : IScreenCaptureService
         if (size.Width <= 0 || size.Height <= 0)
             return;
 
-        var framePool = Direct3D11CaptureFramePool.CreateFreeThreaded(
+        using var framePool = Direct3D11CaptureFramePool.CreateFreeThreaded(
             winrtDevice, DirectXPixelFormat.B8G8R8A8UIntNormalized, 2, size);
-        var session = framePool.CreateCaptureSession(item);
+        using var session = framePool.CreateCaptureSession(item);
 
         // Spec: the cursor must not appear in the frame. Border-removal is Win11-only.
         TrySet(() => session.IsCursorCaptureEnabled = false);
@@ -198,8 +194,6 @@ public sealed class WgcScreenCaptureService : IScreenCaptureService
         {
             framePool.FrameArrived -= OnFrameArrived;
             frame?.Dispose();
-            session.Dispose();
-            framePool.Dispose();
         }
     }
 
@@ -273,9 +267,9 @@ public sealed class WgcScreenCaptureService : IScreenCaptureService
         if (size.Width <= 0 || size.Height <= 0)
             return false;
 
-        var framePool = Direct3D11CaptureFramePool.CreateFreeThreaded(
+        using var framePool = Direct3D11CaptureFramePool.CreateFreeThreaded(
             winrtDevice, DirectXPixelFormat.B8G8R8A8UIntNormalized, 2, size);
-        var session = framePool.CreateCaptureSession(item);
+        using var session = framePool.CreateCaptureSession(item);
         TrySet(() => session.IsCursorCaptureEnabled = false);
         if (OperatingSystem.IsWindowsVersionAtLeast(10, 0, 22000))
             TrySet(() => session.IsBorderRequired = false);
@@ -315,8 +309,6 @@ public sealed class WgcScreenCaptureService : IScreenCaptureService
         {
             framePool.FrameArrived -= OnFrameArrived;
             frame?.Dispose();
-            session.Dispose();
-            framePool.Dispose();
         }
     }
 
@@ -362,12 +354,15 @@ public sealed class WgcScreenCaptureService : IScreenCaptureService
             var offsetY = monitor.Bounds.Top - vTop;
             var rowBytes = copyW * 4;
 
-            for (var y = 0; y < copyH; y++)
-            {
-                IntPtr src = map.DataPointer + y * (int)map.RowPitch;
-                var destIndex = ((offsetY + y) * vWidth + offsetX) * 4;
-                Marshal.Copy(src, buffer, destIndex, rowBytes);
-            }
+            var destinationOffset = (offsetY * vWidth + offsetX) * 4;
+            CaptureNative.CopyMappedRows(
+                map.DataPointer,
+                checked((int)map.RowPitch),
+                buffer,
+                destinationOffset,
+                vWidth * 4,
+                rowBytes,
+                copyH);
         }
         finally
         {

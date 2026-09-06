@@ -16,10 +16,36 @@ public static class FfmpegArgs
         int fps,
         int bitrate,
         string encoder,
-        string outputPath)
+        string outputPath,
+        string? preset = null,
+        string? tune = null,
+        string? extraArgs = null)
     {
-        return $"-hide_banner -loglevel error -y -f rawvideo -pixel_format bgra -video_size {I(width)}x{I(height)} -framerate {I(fps)} -i - -an -c:v {encoder} -b:v {I(bitrate)} -pix_fmt yuv420p -movflags +faststart \"{outputPath}\"";
+        var extra = new StringBuilder();
+        if (!string.IsNullOrWhiteSpace(preset))
+            extra.Append($" -preset {preset}");
+        if (!string.IsNullOrWhiteSpace(tune))
+            extra.Append($" -tune {tune}");
+        if (!string.IsNullOrWhiteSpace(extraArgs))
+            extra.Append($" {extraArgs.Trim()}");
+
+        return $"-hide_banner -loglevel error -y -f rawvideo -pixel_format bgra -video_size {I(width)}x{I(height)} -framerate {I(fps)} -i - -an -c:v {encoder}{extra} -b:v {I(bitrate)} -pix_fmt yuv420p -movflags +faststart \"{outputPath}\"";
     }
+
+    /// <summary>
+    /// Returns recommended (preset, tune, extraArgs) flags tailored to the specific H.264 encoder.
+    /// Real-time screen capture requires low latency and fast encoding to prevent pipe backpressure.
+    /// </summary>
+    public static (string? Preset, string? Tune, string? ExtraArgs) GetDefaultTuning(string encoder) =>
+        encoder switch
+        {
+            "libx264" => ("veryfast", "zerolatency", null),
+            "h264_nvenc" => ("p4", "ll", null),
+            "h264_qsv" => ("veryfast", null, null),
+            "h264_amf" => (null, null, "-quality speed"),
+            "h264_mf" => (null, null, "-scenario live_streaming"),
+            _ => (null, null, null)
+        };
 
     public static string Audio(int sampleRate, int channels, int bitrate, string outputPath)
     {
@@ -29,10 +55,25 @@ public static class FfmpegArgs
     /// <summary>
     /// Builds a no-output live capability trial. The dimensions match the real
     /// recording because hardware availability alone does not imply size support.
+    /// Includes optional tuning flags so drivers that reject live flags fail during probing.
     /// </summary>
-    public static string H264Probe(int width, int height, string encoder)
+    public static string H264Probe(
+        int width,
+        int height,
+        string encoder,
+        string? preset = null,
+        string? tune = null,
+        string? extraArgs = null)
     {
-        return $"-hide_banner -loglevel error -f lavfi -i color=black:s={I(width)}x{I(height)}:r=10:d=0.2 -an -c:v {encoder} -pix_fmt yuv420p -f null -";
+        var extra = new StringBuilder();
+        if (!string.IsNullOrWhiteSpace(preset))
+            extra.Append($" -preset {preset}");
+        if (!string.IsNullOrWhiteSpace(tune))
+            extra.Append($" -tune {tune}");
+        if (!string.IsNullOrWhiteSpace(extraArgs))
+            extra.Append($" {extraArgs.Trim()}");
+
+        return $"-hide_banner -loglevel error -f lavfi -i color=black:s={I(width)}x{I(height)}:r=10:d=0.2 -an -c:v {encoder}{extra} -pix_fmt yuv420p -f null -";
     }
 
     public static string Mux(

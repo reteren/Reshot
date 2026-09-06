@@ -84,25 +84,33 @@ public static class OcrService
                              region.Height * scale > OcrEngine.MaxImageDimension))
             scale--;
 
-        using var crop = CropRegion(frameBgra, frameStride, region);
-        SKBitmap? resized = null;
-        var bmp = crop;
-        if (scale > 1)
-        {
-            resized = crop.Resize(new SKImageInfo(region.Width * scale, region.Height * scale), SKFilterQuality.High);
-            if (resized is not null) bmp = resized;
-            else scale = 1;
-        }
-
         SoftwareBitmap software;
-        try
+        if (scale == 1)
         {
+            var cropBytes = new byte[region.Width * region.Height * 4];
+            int rowBytes = region.Width * 4;
+            for (int y = 0; y < region.Height; y++)
+            {
+                int srcOffset = (region.Top + y) * frameStride + region.Left * 4;
+                Buffer.BlockCopy(frameBgra, srcOffset, cropBytes, y * rowBytes, rowBytes);
+            }
             software = SoftwareBitmap.CreateCopyFromBuffer(
-                bmp.Bytes.AsBuffer(), BitmapPixelFormat.Bgra8, bmp.Width, bmp.Height, BitmapAlphaMode.Ignore);
+                cropBytes.AsBuffer(), BitmapPixelFormat.Bgra8, region.Width, region.Height, BitmapAlphaMode.Ignore);
         }
-        finally
+        else
         {
-            resized?.Dispose();
+            using var crop = CropRegion(frameBgra, frameStride, region);
+            var resized = crop.Resize(new SKImageInfo(region.Width * scale, region.Height * scale), SKFilterQuality.High);
+            try
+            {
+                var bmp = resized ?? crop;
+                software = SoftwareBitmap.CreateCopyFromBuffer(
+                    bmp.Bytes.AsBuffer(), BitmapPixelFormat.Bgra8, bmp.Width, bmp.Height, BitmapAlphaMode.Ignore);
+            }
+            finally
+            {
+                resized?.Dispose();
+            }
         }
 
         OcrResultModel result;

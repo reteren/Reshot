@@ -1,6 +1,5 @@
 using System.IO;
 using System.Windows;
-using System.Windows.Forms;
 using Reshot.App.Input;
 using Reshot.App.Interop;
 using Reshot.App.Overlay;
@@ -50,6 +49,12 @@ public partial class App : System.Windows.Application
     /// hotkey out, and must never open a session showing a screen the user has left.
     /// </summary>
     private int _captureGeneration;
+    /// <summary>
+    /// Bumped by every capture attempt and session transition out of Idle.
+    /// A queued ApplicationIdle cleanup callback from session N captures its generation
+    /// and harmlessly aborts if session N+1 has already begun before the callback runs.
+    /// </summary>
+    private int _cleanupGeneration;
     private readonly SessionStateMachine _session = new();
 
     protected override void OnStartup(StartupEventArgs e)
@@ -60,6 +65,11 @@ public partial class App : System.Windows.Application
         // leave no trace at all, so a stale instance holding the lock looked exactly like
         // "the app is broken", with an empty log to debug it with.
         Log.Init();
+        _session.Changed += (_, to) =>
+        {
+            if (to != SessionState.Idle)
+                unchecked { _cleanupGeneration++; }
+        };
 
         // 2. Single instance, a second launch signals the first and exits.
         _singleInstance = new SingleInstance();
@@ -79,29 +89,19 @@ public partial class App : System.Windows.Application
         DispatcherUnhandledException += (_, args) =>
         {
             Log.Error("Unhandled UI exception", args.Exception);
-            _tray?.ShowBalloon("Reshot: error", args.Exception.Message, ToolTipIcon.Error);
+            _tray?.ShowBalloon("Reshot: error", args.Exception.Message, BalloonIcon.Error);
             args.Handled = true;
         };
 
         _settingsService = new SettingsService();
         var settings = _settingsService.Load();
 
-        // 3. Keep autostart in sync with settings. No prompting here: a UAC dialog on every
-        // logon is exactly what the scheduled-task lane exists to avoid.
-        AutostartManager.Apply(settings.Autostart, settings.AutostartElevated, allowPrompt: false);
-
-        // 4. Tray.
+        // 3. Tray icon immediately: visual presence before any background checks.
         _tray = new TrayIconController();
         _tray.CaptureRequested += (_, _) => OnCaptureRequested("tray menu");
         _tray.MenuRequested += (_, _) => ShowTrayMenu();
 
-        // 5. Capture service: Desktop Duplication for snapshots where it works, WGC
-        // otherwise and for recording. No GPU resources held until a capture is taken.
-        _capture = new ScreenCaptureService();
-        // Ask early for borderless capture access so recordings don't get the yellow border.
-        ScreenCaptureService.RequestBorderlessAccess();
-
-        // 6. Global hotkey.
+        // 4. Global hotkey immediately: hotkey readiness is primary user-facing SLA.
         _hotkey = new HotkeyService();
         _hotkey.HotkeyPressed += (_, _) => OnHotkeyPressed();
         if (!_hotkey.Register(settings.Hotkey))
@@ -110,11 +110,36 @@ public partial class App : System.Windows.Application
                 "Reshot: hotkey unavailable",
                 $"Could not register '{settings.Hotkey}'. It may be in use by another app. " +
                 "Edit settings.json to pick another.",
-                ToolTipIcon.Warning);
+                BalloonIcon.Warning);
         }
 
-        // 6b. Optional quick audio-record hotkey.
+        // 4b. Optional quick audio-record hotkey.
         RegisterAudioHotkey(settings.AudioHotkey);
+
+        // 5. Background initialization: autostart task validation (which queries schtasks.exe)
+        // and WGC borderless access request (WinRT async) run off the UI thread so process-start
+        // to tray-icon-visible and hotkey-ready is minimal and unblocked.
+        _ = Task.Run(() =>
+        {
+            try
+            {
+                AutostartManager.Apply(settings.Autostart, settings.AutostartElevated, allowPrompt: false);
+            }
+            catch (Exception ex)
+            {
+                Log.Error("Startup: background autostart check failed", ex);
+            }
+
+            try
+            {
+                _capture ??= new ScreenCaptureService();
+                ScreenCaptureService.RequestBorderlessAccess();
+            }
+            catch (Exception ex)
+            {
+                Log.Error("Startup: background capture service init failed", ex);
+            }
+        });
 
         // Optional: start a capture immediately (e.g. bound to an external launcher).
         if (e.Args.Contains("--capture", StringComparer.OrdinalIgnoreCase))
@@ -218,7 +243,8 @@ public partial class App : System.Windows.Application
     /// </summary>
     private Task<CapturedFrame> CaptureAsync()
     {
-        var capture = _capture!;
+        _capture ??= new ScreenCaptureService();
+        var capture = _capture;
         return Task.Run(capture.SnapshotAllMonitors);
     }
 
@@ -263,8 +289,13 @@ public partial class App : System.Windows.Application
             return;
 
         var clickToChoose = _settingsService?.Current.Radial.ClickToChoose ?? true;
-        _radial = new Radial.RadialMenuWindow(clickToChoose ? 0 : vk);
-        _radial.Chosen += choice =>
+        var radial = new Radial.RadialMenuWindow(clickToChoose ? 0 : vk);
+        _radial = radial;
+
+        Action<Radial.RadialChoice>? onChosen = null;
+        EventHandler? onClosed = null;
+
+        onChosen = choice =>
         {
             switch (choice)
             {
@@ -273,8 +304,19 @@ public partial class App : System.Windows.Application
                 case Radial.RadialChoice.Settings: OnSettingsRequested(this, EventArgs.Empty); break;
             }
         };
-        _radial.Closed += (_, _) => _radial = null;
-        ShowOverGame(_radial, "Radial menu");
+
+        onClosed = (_, _) =>
+        {
+            radial.Chosen -= onChosen;
+            radial.Closed -= onClosed;
+            radial.Content = null;
+            if (ReferenceEquals(_radial, radial))
+                _radial = null;
+        };
+
+        radial.Chosen += onChosen;
+        radial.Closed += onClosed;
+        ShowOverGame(radial, "Radial menu");
     }
 
     /// <summary>
@@ -371,7 +413,7 @@ public partial class App : System.Windows.Application
     /// <summary>Radial "quick record": records the whole primary monitor with saved video settings.</summary>
     private void QuickRecordPrimaryMonitor()
     {
-        var b = System.Windows.Forms.Screen.PrimaryScreen!.Bounds;
+        var b = NativeMethods.GetPrimaryMonitorBounds();
         StartRecording(new System.Windows.Int32Rect(b.X, b.Y, b.Width, b.Height), null);
     }
 
@@ -408,52 +450,93 @@ public partial class App : System.Windows.Application
             return;
         }
 
-        if (_capture is null || _settingsService is null)
+        _capture ??= new ScreenCaptureService();
+        if (_settingsService is null)
             return;
 
         Log.Info($"Capture requested via {source}; foreground = {NativeMethods.DescribeForegroundWindow()}.");
+        unchecked { _cleanupGeneration++; }
         _session.TryTransition(SessionState.Capturing);
         var generation = ++_captureGeneration;
+
+        // Held out here so every exit path can hand the pooled pixel buffer back:
+        // the frame owns a virtual-desktop-sized rental now, and dropping it on the
+        // floor would keep ~26 MB per capture out of circulation until a finalizer ran.
+        CapturedFrame? frame = null;
         try
         {
-            var frame = await CaptureAsync();
+            frame = await CaptureAsync();
 
             // Pressed again while this frame was in flight: the newer press owns the
             // session, and this frame shows a screen the user has already moved past.
             if (generation != _captureGeneration || _overlay is not null)
             {
                 Log.Info("Capture superseded by a newer press; frame dropped.");
+                frame.Dispose();
+                SchedulePostCaptureCleanup();
                 return;
             }
 
-            _overlay = new OverlayWindow(frame, _settingsService.Current);
-            _overlay.SelectionActiveChanged += active =>
+            var overlay = new OverlayWindow(frame, _settingsService.Current);
+            _overlay = overlay;
+
+            Action<bool>? onSelectionActiveChanged = null;
+            EventHandler<bool>? onSessionEnded = null;
+            Action<System.Windows.Int32Rect, byte[]?, Reshot.Recording.AudioSources?>? onRecord = null;
+            Action<Reshot.Recording.AudioSources>? onAudio = null;
+            EventHandler? onClosed = null;
+
+            onSelectionActiveChanged = active =>
                 _session.TryTransition(active ? SessionState.Editing : SessionState.Selecting);
-            _overlay.SessionEnded += (_, produced) =>
+            onSessionEnded = (_, produced) =>
             {
                 if (produced)
                     _session.TryTransition(SessionState.Exporting);
             };
-            _overlay.RecordRequested += StartRecording;
-            _overlay.AudioRecordRequested += StartAudioRecording;
-            _overlay.Closed += (_, _) =>
+            onRecord = StartRecording;
+            onAudio = StartAudioRecording;
+            onClosed = (_, _) =>
             {
-                _overlay = null;
+                overlay.SelectionActiveChanged -= onSelectionActiveChanged;
+                overlay.SessionEnded -= onSessionEnded;
+                overlay.RecordRequested -= onRecord;
+                overlay.AudioRecordRequested -= onAudio;
+                overlay.Closed -= onClosed;
+                overlay.Content = null;
+
+                // Only now: the overlay read the pixels straight out of this buffer for
+                // the eyedropper, OCR and export, so it has to be torn down first.
+                frame.Dispose();
+
+                if (ReferenceEquals(_overlay, overlay))
+                    _overlay = null;
+
                 // Don't reset the session if the overlay closed to hand off to recording.
                 if (!_recording && !_audioRecording)
+                {
                     _session.Reset();
+                    SchedulePostCaptureCleanup();
+                }
                 Log.Info("Overlay closed.");
             };
 
-            ShowOverGame(_overlay, "Overlay");
+            overlay.SelectionActiveChanged += onSelectionActiveChanged;
+            overlay.SessionEnded += onSessionEnded;
+            overlay.RecordRequested += onRecord;
+            overlay.AudioRecordRequested += onAudio;
+            overlay.Closed += onClosed;
+
+            ShowOverGame(overlay, "Overlay");
             _session.TryTransition(SessionState.Selecting);
         }
         catch (Exception ex)
         {
+            frame?.Dispose();
             _overlay = null;
             _session.Reset();
             Log.Error("Capture failed", ex);
-            _tray?.ShowBalloon("Reshot: capture failed", ex.Message, ToolTipIcon.Error);
+            _tray?.ShowBalloon("Reshot: capture failed", ex.Message, BalloonIcon.Error);
+            SchedulePostCaptureCleanup();
         }
     }
 
@@ -479,7 +562,7 @@ public partial class App : System.Windows.Application
             _tray?.ShowBalloon(
                 "Reshot: recording unavailable",
                 "ffmpeg.exe is missing from the installation. Reinstall Reshot, or place ffmpeg.exe next to reshot.exe.",
-                ToolTipIcon.Error);
+                BalloonIcon.Error);
             return;
         }
 
@@ -509,7 +592,7 @@ public partial class App : System.Windows.Application
             _recording = true;
             _session.TryTransition(SessionState.Recording);
 
-            var primary = System.Windows.Forms.Screen.PrimaryScreen!.Bounds;
+            var primary = NativeMethods.GetPrimaryMonitorBounds();
             _hud = new Recording.RecordingHudWindow(
                 rect, $"{_recorder.Width}×{_recorder.Height}",
                 settings.Video.Corners.Enabled, settings.Video.Corners.Color, settings.Video.Corners.Opacity,
@@ -522,7 +605,7 @@ public partial class App : System.Windows.Application
         catch (Exception ex)
         {
             Log.Error("Failed to start recording", ex);
-            _tray?.ShowBalloon("Reshot: recording failed", ex.Message, ToolTipIcon.Error);
+            _tray?.ShowBalloon("Reshot: recording failed", ex.Message, BalloonIcon.Error);
             _recording = false;
             StopRecording();
         }
@@ -591,17 +674,18 @@ public partial class App : System.Windows.Application
             }
             else
             {
-                _tray?.ShowBalloon("Reshot: saving failed", "See reshot.log for details.", ToolTipIcon.Error);
+                _tray?.ShowBalloon("Reshot: saving failed", "See reshot.log for details.", BalloonIcon.Error);
             }
         }
         catch (Exception ex)
         {
             Log.Error("Error finalizing recording", ex);
-            _tray?.ShowBalloon("Reshot: saving failed", ex.Message, ToolTipIcon.Error);
+            _tray?.ShowBalloon("Reshot: saving failed", ex.Message, BalloonIcon.Error);
         }
         finally
         {
             recorder.Dispose();
+            SchedulePostCaptureCleanup();
         }
     }
 
@@ -620,7 +704,7 @@ public partial class App : System.Windows.Application
             _tray?.ShowBalloon(
                 "Reshot: audio hotkey unavailable",
                 $"Could not register '{hotkey}'. It may be in use by another app.",
-                ToolTipIcon.Warning);
+                BalloonIcon.Warning);
         }
     }
 
@@ -667,7 +751,7 @@ public partial class App : System.Windows.Application
             _tray?.ShowBalloon(
                 "Reshot: recording unavailable",
                 "ffmpeg.exe is missing from the installation. Reinstall Reshot, or place ffmpeg.exe next to reshot.exe.",
-                ToolTipIcon.Error);
+                BalloonIcon.Error);
             return;
         }
 
@@ -689,7 +773,7 @@ public partial class App : System.Windows.Application
             _audioRecorder = new Reshot.Recording.AudioRecorder(_audioRecordingPath, sources);
             _audioRecording = true;
 
-            var primary = System.Windows.Forms.Screen.PrimaryScreen!.Bounds;
+            var primary = NativeMethods.GetPrimaryMonitorBounds();
             _audioHud = new Recording.RecordingHudWindow(
                 new System.Windows.Int32Rect(0, 0, 0, 0), "Audio",
                 cornersEnabled: false, "#FF0000", 1.0,
@@ -703,7 +787,7 @@ public partial class App : System.Windows.Application
         catch (Exception ex)
         {
             Log.Error("Failed to start audio recording", ex);
-            _tray?.ShowBalloon("Reshot: audio recording failed", ex.Message, ToolTipIcon.Error);
+            _tray?.ShowBalloon("Reshot: audio recording failed", ex.Message, BalloonIcon.Error);
             _audioRecording = false;
             StopAudioRecording();
         }
@@ -730,6 +814,8 @@ public partial class App : System.Windows.Application
             Log.Info($"Audio recording saved → {_audioRecordingPath}");
             _audioRecordingPath = null;
         }
+
+        SchedulePostCaptureCleanup();
     }
 
     /// <summary>Opens the styled tray menu at the cursor and wires its intents.</summary>
@@ -737,18 +823,43 @@ public partial class App : System.Windows.Application
     {
         if (_trayMenu is not null)
         {
+            var existingHwnd = new System.Windows.Interop.WindowInteropHelper(_trayMenu).Handle;
+            if (existingHwnd != IntPtr.Zero)
+                NativeMethods.ForceForegroundWindow(existingHwnd, invasive: false);
             _trayMenu.Activate();
             return;
         }
 
         var menu = new Tray.TrayMenuWindow(_tray?.IsPaused ?? false);
         _trayMenu = menu;
-        menu.Closed += (_, _) => _trayMenu = null;
 
-        menu.CaptureRequested += (_, _) => OnCaptureRequested("tray menu");
-        menu.SettingsRequested += OnSettingsRequested;
-        menu.PauseHotkeyToggled += OnPauseHotkeyToggled;
-        menu.QuitRequested += (_, _) => Shutdown();
+        EventHandler? onCapture = null;
+        EventHandler? onSettings = null;
+        EventHandler<bool>? onPause = null;
+        EventHandler? onQuit = null;
+        EventHandler? onClosed = null;
+
+        onCapture = (_, _) => OnCaptureRequested("tray menu");
+        onSettings = OnSettingsRequested;
+        onPause = OnPauseHotkeyToggled;
+        onQuit = (_, _) => Shutdown();
+        onClosed = (_, _) =>
+        {
+            menu.CaptureRequested -= onCapture;
+            menu.SettingsRequested -= onSettings;
+            menu.PauseHotkeyToggled -= onPause;
+            menu.QuitRequested -= onQuit;
+            menu.Closed -= onClosed;
+            menu.Content = null;
+            if (ReferenceEquals(_trayMenu, menu))
+                _trayMenu = null;
+        };
+
+        menu.CaptureRequested += onCapture;
+        menu.SettingsRequested += onSettings;
+        menu.PauseHotkeyToggled += onPause;
+        menu.QuitRequested += onQuit;
+        menu.Closed += onClosed;
 
         menu.ShowAtCursor();
     }
@@ -778,7 +889,7 @@ public partial class App : System.Windows.Application
                 "Reshot: settings unavailable",
                 "The settings app (reshot-tauri.exe) was not found. Build it with " +
                 "'npm run tauri build' in src/reshot-tauri.",
-                ToolTipIcon.Error);
+                BalloonIcon.Error);
             return;
         }
 
@@ -802,7 +913,7 @@ public partial class App : System.Windows.Application
         {
             _settingsProcess = null;
             Log.Error("Settings app failed to start", ex);
-            _tray?.ShowBalloon("Reshot: settings failed", ex.Message, ToolTipIcon.Error);
+            _tray?.ShowBalloon("Reshot: settings failed", ex.Message, BalloonIcon.Error);
         }
     }
 
@@ -852,7 +963,7 @@ public partial class App : System.Windows.Application
                 "Reshot: starting normally",
                 "Administrator rights were not granted, so Reshot will start with Windows " +
                 "without them. Overlays over elevated applications will not work.",
-                ToolTipIcon.Warning);
+                BalloonIcon.Warning);
         }
     }
 
@@ -898,7 +1009,7 @@ public partial class App : System.Windows.Application
                 _tray?.ShowBalloon(
                     "Reshot: hotkey unavailable",
                     $"Could not register '{updated.Hotkey}'. It may be in use by another app.",
-                    ToolTipIcon.Warning);
+                    BalloonIcon.Warning);
             }
         }
 
@@ -932,6 +1043,32 @@ public partial class App : System.Windows.Application
             Log.Info("A second instance was launched; surfacing this one.");
             _tray?.ShowBalloon("Reshot", "Reshot is already running here.");
         });
+    }
+
+    /// <summary>
+    /// Reclaims large short-lived buffers (LOH) back to the OS when the app returns to idle in tray.
+    /// Under normal CLR behavior, an idle tray app performs virtually zero allocations, so Gen 2 GC
+    /// never runs naturally, leaving ~33-100MB LOH frame buffers rooted in committed memory indefinitely.
+    /// Running on ApplicationIdle priority ensures zero impact on UI responsiveness or capture latency.
+    /// Gated strictly on SessionState.Idle and a generation token to prevent running during active sessions.
+    /// </summary>
+    private void SchedulePostCaptureCleanup()
+    {
+        var generation = _cleanupGeneration;
+        Dispatcher.BeginInvoke(System.Windows.Threading.DispatcherPriority.ApplicationIdle, new Action(() =>
+        {
+            if (generation != _cleanupGeneration)
+                return;
+
+            if (_session.State != SessionState.Idle)
+                return;
+
+            if (_overlay is not null || _recording || _audioRecording)
+                return;
+
+            System.Runtime.GCSettings.LargeObjectHeapCompactionMode = System.Runtime.GCLargeObjectHeapCompactionMode.CompactOnce;
+            GC.Collect(2, GCCollectionMode.Forced, blocking: false, compacting: true);
+        }));
     }
 
     protected override void OnExit(ExitEventArgs e)

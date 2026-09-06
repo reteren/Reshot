@@ -72,6 +72,47 @@ internal static class CaptureNative
         return result;
     }
 
+    /// <summary>
+    /// Copies mapped BGRA rows into a managed buffer. When both sides are tightly packed,
+    /// pin the destination and copy the entire image in one operation; monitor composition
+    /// still uses the row path because each monitor occupies a slot in a wider virtual frame.
+    /// </summary>
+    public static unsafe void CopyMappedRows(
+        IntPtr source,
+        int sourceStride,
+        byte[] destination,
+        int destinationOffset,
+        int destinationStride,
+        int rowBytes,
+        int rowCount)
+    {
+        if (rowCount <= 0 || rowBytes <= 0)
+            return;
+
+        if (sourceStride == rowBytes && destinationStride == rowBytes)
+        {
+            var byteCount = checked(rowBytes * rowCount);
+            fixed (byte* destinationPtr = destination)
+            {
+                Buffer.MemoryCopy(
+                    (void*)source,
+                    destinationPtr + destinationOffset,
+                    destination.Length - destinationOffset,
+                    byteCount);
+            }
+            return;
+        }
+
+        for (var y = 0; y < rowCount; y++)
+        {
+            Marshal.Copy(
+                source + y * sourceStride,
+                destination,
+                checked(destinationOffset + y * destinationStride),
+                rowBytes);
+        }
+    }
+
     // ---- WinRT <-> D3D bridge ---------------------------------------------------
 
     /// <summary>Wraps a DXGI device as a WinRT IDirect3DDevice (returns +1 ref IInspectable).</summary>

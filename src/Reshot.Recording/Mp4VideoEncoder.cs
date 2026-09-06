@@ -65,8 +65,9 @@ public sealed class Mp4VideoEncoder : IDisposable
         try
         {
             var encoder = Ffmpeg.SelectH264Encoder(encodedWidth, encodedHeight);
+            var (preset, tune, extraArgs) = FfmpegArgs.GetDefaultTuning(encoder);
             _process = Ffmpeg.Start(
-                FfmpegArgs.Video(encodedWidth, encodedHeight, fps, bitrate, encoder, _videoPath),
+                FfmpegArgs.Video(encodedWidth, encodedHeight, fps, bitrate, encoder, _videoPath, preset, tune, extraArgs),
                 redirectStdin: true);
             _videoInput = _process.StandardInput.BaseStream;
             Log.Info($"Encoder: ffmpeg/{encoder} {encodedWidth}x{encodedHeight} @ {fps}fps, {bitrate / 1000}kbps"

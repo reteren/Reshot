@@ -70,6 +70,7 @@ public sealed class ProcessLoopbackCapture : IWaveIn
 
             _client.Start();
             var frameBytes = WaveFormat.BlockAlign;
+            byte[] recordBuffer = Array.Empty<byte>();
             while (!_stop)
             {
                 if (WaitForSingleObject(_event, 200) != 0)
@@ -80,12 +81,17 @@ public sealed class ProcessLoopbackCapture : IWaveIn
                     if (r != 0)
                         break;
                     var bytes = (int)frames * frameBytes;
-                    var buffer = new byte[bytes];
+                    if (recordBuffer.Length < bytes)
+                        recordBuffer = new byte[bytes];
+
                     if ((flags & 0x2) == 0 && data != IntPtr.Zero) // not AUDCLNT_BUFFERFLAGS_SILENT
-                        Marshal.Copy(data, buffer, 0, bytes);
+                        Marshal.Copy(data, recordBuffer, 0, bytes);
+                    else
+                        Array.Clear(recordBuffer, 0, bytes);
+
                     _capture.ReleaseBuffer(frames);
                     if (bytes > 0)
-                        DataAvailable?.Invoke(this, new WaveInEventArgs(buffer, bytes));
+                        DataAvailable?.Invoke(this, new WaveInEventArgs(recordBuffer, bytes));
                 }
             }
             _client.Stop();

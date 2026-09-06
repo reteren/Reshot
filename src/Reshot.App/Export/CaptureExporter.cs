@@ -100,7 +100,8 @@ public sealed class CaptureExporter
     {
         var data = new DataObject();
 
-        var ms = new MemoryStream();
+        var estimatedCapacity = Math.Max(8192, Math.Min(image.PixelWidth * image.PixelHeight, 4 * 1024 * 1024));
+        var ms = new MemoryStream(estimatedCapacity);
         var encoder = new PngBitmapEncoder();
         encoder.Frames.Add(BitmapFrame.Create(image));
         encoder.Save(ms);

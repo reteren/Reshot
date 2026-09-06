@@ -8,6 +8,10 @@
   </PropertyGroup>
 
   <ItemGroup>
+    <InternalsVisibleTo Include="Reshot.Recording.Tests" />
+  </ItemGroup>
+
+  <ItemGroup>
     <ProjectReference Include="..\Reshot.Core\Reshot.Core.csproj" />
     <ProjectReference Include="..\Reshot.Capture\Reshot.Capture.csproj" />
   </ItemGroup>

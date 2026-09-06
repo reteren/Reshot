@@ -1,4 +1,8 @@
 using System.Windows;
+using System.Windows.Input;
+using System.Windows.Interop;
+using System.Windows.Media;
+using Reshot.App.Interop;
 
 namespace Reshot.App.Tray;
 
@@ -31,6 +35,7 @@ public partial class TrayMenuWindow : Window
     {
         InitializeComponent();
 
+        WindowStartupLocation = WindowStartupLocation.Manual;
         PauseCheck.IsChecked = paused;
 
         CaptureBtn.Click += (_, _) => Fire(CaptureRequested);
@@ -59,13 +64,74 @@ public partial class TrayMenuWindow : Window
             return;
 
         _closing = true;
+        if (Mouse.Captured is not null && IsDescendant(Mouse.Captured as DependencyObject))
+        {
+            Mouse.Capture(null);
+        }
         Close();
+    }
+
+    protected override void OnPreviewMouseDown(MouseButtonEventArgs e)
+    {
+        base.OnPreviewMouseDown(e);
+        var pos = e.GetPosition(this);
+        if (pos.X < 0 || pos.X > ActualWidth || pos.Y < 0 || pos.Y > ActualHeight)
+        {
+            CloseOnce();
+        }
+    }
+
+    protected override void OnLostMouseCapture(MouseEventArgs e)
+    {
+        base.OnLostMouseCapture(e);
+        if (_closing)
+            return;
+
+        var captured = Mouse.Captured as DependencyObject;
+        if (captured is null || !IsDescendant(captured))
+        {
+            CloseOnce();
+        }
+    }
+
+    protected override void OnPreviewKeyDown(KeyEventArgs e)
+    {
+        base.OnPreviewKeyDown(e);
+        if (e.Key == Key.Escape)
+        {
+            CloseOnce();
+            e.Handled = true;
+        }
+    }
+
+    private bool IsDescendant(DependencyObject? element)
+    {
+        while (element is not null)
+        {
+            if (ReferenceEquals(element, this))
+                return true;
+
+            DependencyObject? parent = null;
+            if (element is Visual or System.Windows.Media.Media3D.Visual3D)
+            {
+                parent = VisualTreeHelper.GetParent(element);
+            }
+            parent ??= LogicalTreeHelper.GetParent(element);
+            element = parent;
+        }
+        return false;
     }
 
     protected override void OnClosing(System.ComponentModel.CancelEventArgs e)
     {
         _closing = true;
         base.OnClosing(e);
+    }
+
+    protected override void OnClosed(EventArgs e)
+    {
+        Content = null;
+        base.OnClosed(e);
     }
 
     private void Fire(EventHandler? handler)
@@ -81,36 +147,52 @@ public partial class TrayMenuWindow : Window
     /// </summary>
     public void ShowAtCursor()
     {
+        NativeMethods.GetCursorPos(out var cursor);
+        NativeMethods.GetDpiForPoint(cursor, out var dpiScaleX, out var dpiScaleY);
+        var work = NativeMethods.GetWorkingArea(cursor);
+
+        // Pre-position on the target monitor before Show() to prevent flashing at (0,0)
+        // and to ensure WPF queries monitor DPI for the target monitor rather than the primary.
+        var cursorDipX = cursor.X / dpiScaleX;
+        var cursorDipY = cursor.Y / dpiScaleY;
+        Left = cursorDipX;
+        Top = cursorDipY;
+
+        var helper = new WindowInteropHelper(this);
+        var hwnd = helper.EnsureHandle();
+
+        // Win32 notify-icon rule: assert foreground on the menu HWND before showing/activating,
+        // defeating foreground lock arbitration so Deactivated and focus behave normally.
+        NativeMethods.ForceForegroundWindow(hwnd, invasive: false);
+
         // Measure before positioning: SizeToContent means the size is unknown
         // until the layout pass runs.
         Show();
         UpdateLayout();
 
-        var cursor = System.Windows.Forms.Cursor.Position;
-        var screen = System.Windows.Forms.Screen.FromPoint(cursor);
-        var work = screen.WorkingArea;
-
-        var source = PresentationSource.FromVisual(this);
-        var toDip = source?.CompositionTarget?.TransformFromDevice
-                    ?? System.Windows.Media.Matrix.Identity;
-
-        var cursorDip = toDip.Transform(new System.Windows.Point(cursor.X, cursor.Y));
-        var workTopLeft = toDip.Transform(new System.Windows.Point(work.Left, work.Top));
-        var workBottomRight = toDip.Transform(new System.Windows.Point(work.Right, work.Bottom));
+        // Convert target monitor bounds to DIPs using that specific monitor's DPI scale.
+        var workLeft = work.Left / dpiScaleX;
+        var workTop = work.Top / dpiScaleY;
+        var workRight = work.Right / dpiScaleX;
+        var workBottom = work.Bottom / dpiScaleY;
 
         // Prefer opening up-left of the cursor; flip to the other side when the
         // tray sits at the top or left of the screen instead.
-        var left = cursorDip.X - ActualWidth;
-        if (left < workTopLeft.X)
-            left = cursorDip.X;
+        var left = cursorDipX - ActualWidth;
+        if (left < workLeft)
+            left = cursorDipX;
 
-        var top = cursorDip.Y - ActualHeight;
-        if (top < workTopLeft.Y)
-            top = cursorDip.Y;
+        var top = cursorDipY - ActualHeight;
+        if (top < workTop)
+            top = cursorDipY;
 
-        Left = Math.Min(left, workBottomRight.X - ActualWidth);
-        Top = Math.Min(top, workBottomRight.Y - ActualHeight);
+        Left = Math.Min(left, workRight - ActualWidth);
+        Top = Math.Min(top, workBottom - ActualHeight);
 
         Activate();
+
+        // Fallback dismissal: capture mouse within this visual subtree so any outside click
+        // dismisses the menu even if Windows foreground arbitration failed.
+        Mouse.Capture(this, CaptureMode.SubTree);
     }
 }
