@@ -58,10 +58,20 @@ public partial class OverlayWindow : Window
     private ShapeKind _activeShape = ShapeKind.Rectangle;
 
     // Drawing (Phase 3): the editable document + brush.
+    private bool _isClosed;
     private CaptureDocument? _document;
     private readonly UndoHistory _history = new();
     private ToolMode _tool = ToolMode.Select;
     private DrawSubTool _drawSub = DrawSubTool.Brush;
+
+    // Dynamic DrawSurface sizing: sized to the active selection + committed content
+    // bounds instead of the entire 4480x1440 virtual desktop. Cuts repaint buffer
+    // from 25.8 MB down to ~1.9 MB (92.5% reduction) for an 800x600 selection.
+    private int _drawSurfacePxX;
+    private int _drawSurfacePxY;
+    private int _drawSurfacePxW;
+    private int _drawSurfacePxH;
+    private SKRectI _contentBounds = SKRectI.Empty;
 
     // Per-tool settings: every tool keeps its own size / opacity / colour, so switching
     // tools no longer carries the previous tool's values over. Effects store their Strength
@@ -1062,6 +1072,7 @@ public partial class OverlayWindow : Window
         _document.CommitVector(v, clip);
         var after = CaptureDocument.SnapshotRegion(_document.PaintLayer, region);
         _history.Push(new LayerRegionCommand(_document.PaintLayer, region, before, after));
+        _contentBounds = _contentBounds.IsEmpty ? region : SKRectI.Union(_contentBounds, region);
     }
 
     /// <summary>Paint region a shape/text touches, padded for stroke width and arrowheads.</summary>
@@ -1360,6 +1371,7 @@ public partial class OverlayWindow : Window
             var region = RectToRegion(area.Bounds);
             if (region is { Width: > 0, Height: > 0 })
             {
+                _contentBounds = _contentBounds.IsEmpty ? region : SKRectI.Union(_contentBounds, region);
                 switch (_drawSub)
                 {
                     case DrawSubTool.Blur or DrawSubTool.Pixelize:
@@ -1454,6 +1466,7 @@ public partial class OverlayWindow : Window
                     _document.CommitStroke(_stroke.Path, paint, _strokeClip);
                 var after = CaptureDocument.SnapshotRegion(_document.PaintLayer, region);
                 _history.Push(new LayerRegionCommand(_document.PaintLayer, region, before, after));
+                _contentBounds = _contentBounds.IsEmpty ? region : SKRectI.Union(_contentBounds, region);
             }
         }
 
@@ -1546,6 +1559,8 @@ public partial class OverlayWindow : Window
         try
         {
             var result = await OcrService.RecognizeAsync(_frame.PixelsBgra, _frame.Stride, r, _ocrLang);
+            if (_isClosed)
+                return;
             _ocr = new OcrTextLayer(result.Words);
             if (result.IsEmpty)
                 ShowOcrHint($"No text found ({OcrModeLabel()}). Right-click the tool to switch mode.");
@@ -1554,6 +1569,8 @@ public partial class OverlayWindow : Window
         }
         catch (Exception ex)
         {
+            if (_isClosed)
+                return;
             Log.Error("OCR failed.", ex);
             _ocr = new OcrTextLayer(Array.Empty<OcrWord>());
             ShowOcrHint("OCR failed, see the log.");
@@ -1561,7 +1578,8 @@ public partial class OverlayWindow : Window
         finally
         {
             _ocrBusy = false;
-            RefreshDrawSurface();
+            if (!_isClosed)
+                RefreshDrawSurface();
         }
     }
 
@@ -1666,17 +1684,107 @@ public partial class OverlayWindow : Window
         (_tool == ToolMode.Draw && _brushCursorVisible && !_eyedropping && !_eyedropperArmed) ||
         _ocr?.HasWords == true;
 
+    private void UpdateDrawSurfaceBounds()
+    {
+        var sels = AllSelections().ToList();
+        if (sels.Count == 0 && _contentBounds.IsEmpty)
+        {
+            if (_ocrMode && _ocr is not null)
+            {
+                var r = OcrSelectionRegion();
+                if (r is { } ocrR)
+                {
+                    ApplyDrawSurfaceBounds(ocrR.Left, ocrR.Top, ocrR.Width, ocrR.Height);
+                    return;
+                }
+            }
+
+            ApplyDrawSurfaceBounds(0, 0, 0, 0);
+            return;
+        }
+
+        int minX = int.MaxValue, minY = int.MaxValue;
+        int maxX = int.MinValue, maxY = int.MinValue;
+
+        foreach (var s in sels)
+        {
+            var px = BoundsToPixels(s.Bounds);
+            minX = Math.Min(minX, px.X);
+            minY = Math.Min(minY, px.Y);
+            maxX = Math.Max(maxX, px.X + px.Width);
+            maxY = Math.Max(maxY, px.Y + px.Height);
+        }
+
+        if (!_contentBounds.IsEmpty)
+        {
+            minX = Math.Min(minX, _contentBounds.Left);
+            minY = Math.Min(minY, _contentBounds.Top);
+            maxX = Math.Max(maxX, _contentBounds.Right);
+            maxY = Math.Max(maxY, _contentBounds.Bottom);
+        }
+
+        // The brush ring follows the pointer, which is free to leave the selection
+        // entirely. Padding the selection covers a ring hugging its edge and nothing
+        // further out, so the ring's own box joins the union instead.
+        if (_brushCursorVisible && _tool == ToolMode.Draw)
+        {
+            var pad = (int)Math.Ceiling(_brush.Thickness / 2f + 4f);
+            minX = Math.Min(minX, (int)Math.Floor(_cursorPhysical.X) - pad);
+            minY = Math.Min(minY, (int)Math.Floor(_cursorPhysical.Y) - pad);
+            maxX = Math.Max(maxX, (int)Math.Ceiling(_cursorPhysical.X) + pad);
+            maxY = Math.Max(maxY, (int)Math.Ceiling(_cursorPhysical.Y) + pad);
+        }
+
+        // Snapped outwards to a coarse grid so that dragging the pointer or a selection
+        // edge does not resize the surface — and reallocate its raster — on every mouse
+        // move. At most 64 px of slack per side against a saving measured in megabytes.
+        const int grid = 64;
+        minX = minX / grid * grid;
+        minY = minY / grid * grid;
+        maxX = (maxX + grid - 1) / grid * grid;
+        maxY = (maxY + grid - 1) / grid * grid;
+
+        minX = Math.Clamp(minX, 0, _frame.Width);
+        minY = Math.Clamp(minY, 0, _frame.Height);
+        maxX = Math.Clamp(maxX, minX, _frame.Width);
+        maxY = Math.Clamp(maxY, minY, _frame.Height);
+
+        ApplyDrawSurfaceBounds(minX, minY, maxX - minX, maxY - minY);
+    }
+
+    private void ApplyDrawSurfaceBounds(int pxX, int pxY, int pxW, int pxH)
+    {
+        if (_drawSurfacePxX == pxX && _drawSurfacePxY == pxY &&
+            _drawSurfacePxW == pxW && _drawSurfacePxH == pxH)
+            return;
+
+        _drawSurfacePxX = pxX;
+        _drawSurfacePxY = pxY;
+        _drawSurfacePxW = pxW;
+        _drawSurfacePxH = pxH;
+
+        DrawSurface.Margin = new Thickness(pxX / _dpiScaleX, pxY / _dpiScaleY, 0, 0);
+        DrawSurface.Width = pxW / _dpiScaleX;
+        DrawSurface.Height = pxH / _dpiScaleY;
+    }
+
     private void UpdateDrawSurfaceVisibility()
     {
         var visibility = ShouldRenderDrawSurface ? Visibility.Visible : Visibility.Collapsed;
         if (DrawSurface.Visibility != visibility)
             DrawSurface.Visibility = visibility;
+
+        if (visibility == Visibility.Visible)
+            UpdateDrawSurfaceBounds();
     }
 
     // Mouse input can request the same full-frame raster more than once before WPF
     // reaches its render pass; defer one invalidation so that burst collapses here.
     private void RefreshDrawSurface()
     {
+        if (_isClosed)
+            return;
+
         UpdateDrawSurfaceVisibility();
         if (DrawSurface.Visibility != Visibility.Visible)
             return;
@@ -1688,6 +1796,9 @@ public partial class OverlayWindow : Window
         Dispatcher.BeginInvoke(DispatcherPriority.Render, new Action(() =>
         {
             _drawRefreshQueued = false;
+            if (_isClosed)
+                return;
+
             UpdateDrawSurfaceVisibility();
             if (DrawSurface.Visibility == Visibility.Visible &&
                 !Dispatcher.HasShutdownStarted && !Dispatcher.HasShutdownFinished)
@@ -1699,13 +1810,24 @@ public partial class OverlayWindow : Window
     {
         var canvas = e.Surface.Canvas;
         canvas.Clear(SKColors.Transparent);
+        if (_isClosed)
+            return;
+
         if (_document is null)
         {
             // OCR highlights don't need a document (text may not have been drawn on).
             if (_ocrMode && _ocr is not null)
+            {
+                canvas.Save();
+                canvas.Translate(-_drawSurfacePxX, -_drawSurfacePxY);
                 _ocr.Render(canvas);
+                canvas.Restore();
+            }
             return;
         }
+
+        canvas.Save();
+        canvas.Translate(-_drawSurfacePxX, -_drawSurfacePxY);
 
         // While actively drawing, clip to the selection bounds: everything drawn is
         // inside the selection anyway, and on a large virtual desktop the full-frame
@@ -1846,6 +1968,8 @@ public partial class OverlayWindow : Window
         // OCR selection highlights sit above every layer.
         if (_ocrMode && _ocr is not null)
             _ocr.Render(canvas);
+
+        canvas.Restore();
     }
 
     /// <summary>Draws a ring the size of the brush at the cursor (double-stroked for contrast).</summary>
@@ -3716,16 +3840,24 @@ public partial class OverlayWindow : Window
 
     protected override void OnClosed(EventArgs e)
     {
+        _isClosed = true;
         FrameView.Source = null;
         _frameBitmap = null;
         _history.Dispose();
         _document?.Dispose();
+        _document = null;
         _strokeClip?.Dispose();
+        _strokeClip = null;
         _effectStroke?.Dispose();
+        _effectStroke = null;
         _baseBitmap?.Dispose();
+        _baseBitmap = null;
         _blurBase?.Dispose();
+        _blurBase = null;
         _pixelBase?.Dispose();
+        _pixelBase = null;
         _checkerShader?.Dispose();
+        _checkerShader = null;
         base.OnClosed(e);
     }
 }

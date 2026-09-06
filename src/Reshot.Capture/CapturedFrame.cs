@@ -1,5 +1,4 @@
-using System.Runtime;
-
+﻿
 namespace Reshot.Capture;
 
 /// <summary>
@@ -17,6 +16,15 @@ public sealed class CapturedFrame : IDisposable
     public CapturedFrame()
     {
     }
+
+    /// <summary>
+    /// Raised on a timer thread once the pooled frame buffer has been idle long enough to be
+    /// dropped. The host subscribes to compact the large-object heap at a moment it knows is
+    /// safe; the pool itself cannot tell a recording or an export from an idle tray.
+    /// </summary>
+    public static event Action? PoolWentIdle;
+
+    internal static void RaisePoolWentIdle() => PoolWentIdle?.Invoke();
 
     /// <summary>
     /// The captured pixels. Access after <see cref="Dispose"/> throws instead of exposing a
@@ -196,13 +204,14 @@ internal static class FrameBufferPool
             _retained = null;
             _retainedLength = 0;
             DisposeEvictionTimerLocked();
-
-            // Keep Rent blocked while compacting. Dropping the root alone leaves an
-            // otherwise idle LOH segment committed until the runtime's next collection;
-            // CompactOnce makes the idle release observable in the process working set.
-            GCSettings.LargeObjectHeapCompactionMode = GCLargeObjectHeapCompactionMode.CompactOnce;
-            GC.Collect(2, GCCollectionMode.Forced, blocking: true, compacting: true);
         }
+
+        // Dropping the root alone leaves an otherwise idle LOH segment committed until the
+        // runtime's next collection, so someone still has to compact. Not us: this timer
+        // knows nothing about whether a recording or an export is running, and a blocking
+        // compacting gen-2 in the middle of one is a visible stutter. The app layer owns
+        // session state, so it decides when collecting is safe.
+        CapturedFrame.RaisePoolWentIdle();
     }
 
     private static void DisposeEvictionTimerLocked()

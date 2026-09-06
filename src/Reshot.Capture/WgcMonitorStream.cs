@@ -1,4 +1,6 @@
+using System.Runtime.CompilerServices;
 using System.Runtime.InteropServices;
+using System.Threading;
 using Reshot.Capture.Interop;
 using Reshot.Core.Diagnostics;
 using Vortice.Direct3D;
@@ -9,6 +11,8 @@ using Windows.Graphics.DirectX;
 using WinRT;
 using static Vortice.Direct3D11.D3D11;
 using WinRTDirect3DDevice = Windows.Graphics.DirectX.Direct3D11.IDirect3DDevice;
+
+[assembly: InternalsVisibleTo("Reshot.Recording.Tests")]
 
 namespace Reshot.Capture;
 
@@ -30,7 +34,13 @@ public sealed class WgcMonitorStream : IDisposable
     private readonly byte[] _latest;   // monitor-sized BGRA, guarded by _lock
     private readonly object _lock = new();
     private volatile bool _hasFrame;
-    private bool _disposed;
+    private int _isDisposed;
+    private int _inFlight;
+    private readonly ManualResetEventSlim _drained = new(false);
+
+    internal int InFlightCallbacks => Volatile.Read(ref _inFlight);
+    internal bool IsDisposed => Volatile.Read(ref _isDisposed) != 0;
+    internal Action? FrameProcessingStarting { get; set; }
 
     /// <summary>Monitor origin in virtual-screen coordinates.</summary>
     public int MonitorLeft { get; }
@@ -95,62 +105,106 @@ public sealed class WgcMonitorStream : IDisposable
             (winrtDevice as IDisposable)?.Dispose();
             context?.Dispose();
             device?.Dispose();
+            _drained.Dispose();
             throw;
         }
     }
 
     private void OnFrameArrived(Direct3D11CaptureFramePool pool, object _)
     {
-        using var frame = pool.TryGetNextFrame();
-        if (frame is null)
-            return;
-
-        var access = frame.Surface.As<CaptureNative.IDirect3DDxgiInterfaceAccess>();
-        var iidTex = CaptureNative.ID3D11Texture2D;
-        var texPtr = access.GetInterface(ref iidTex);
-        using var sourceTex = new ID3D11Texture2D(texPtr);
-        var desc = sourceTex.Description;
-
-        if (_staging is null || _staging.Description.Width != desc.Width || _staging.Description.Height != desc.Height)
+        Interlocked.Increment(ref _inFlight);
+        if (Volatile.Read(ref _isDisposed) != 0)
         {
-            _staging?.Dispose();
-            _staging = _device.CreateTexture2D(new Texture2DDescription
-            {
-                Width = desc.Width,
-                Height = desc.Height,
-                MipLevels = 1,
-                ArraySize = 1,
-                Format = desc.Format,
-                SampleDescription = new SampleDescription(1, 0),
-                Usage = ResourceUsage.Staging,
-                CPUAccessFlags = CpuAccessFlags.Read,
-            });
+            if (Interlocked.Decrement(ref _inFlight) == 0 && Volatile.Read(ref _isDisposed) != 0)
+                _drained.Set();
+            return;
         }
 
-        _context.CopyResource(_staging, sourceTex);
-        var map = _context.Map(_staging, 0, MapMode.Read, Vortice.Direct3D11.MapFlags.None);
         try
         {
-            var copyW = Math.Min((int)desc.Width, Width);
-            var copyH = Math.Min((int)desc.Height, Height);
-            var rowBytes = copyW * 4;
-            var destStride = Width * 4;
-            lock (_lock)
+            FrameProcessingStarting?.Invoke();
+
+            Direct3D11CaptureFrame? frame = null;
+            try
             {
-                CaptureNative.CopyMappedRows(
-                    map.DataPointer,
-                    checked((int)map.RowPitch),
-                    _latest,
-                    0,
-                    destStride,
-                    rowBytes,
-                    copyH);
-                _hasFrame = true;
+                frame = pool.TryGetNextFrame();
             }
+            catch (Exception ex) when (ex is ObjectDisposedException or COMException)
+            {
+                return;
+            }
+
+            if (frame is null || Volatile.Read(ref _isDisposed) != 0)
+            {
+                frame?.Dispose();
+                return;
+            }
+
+            using (frame)
+            {
+                var access = frame.Surface.As<CaptureNative.IDirect3DDxgiInterfaceAccess>();
+                var iidTex = CaptureNative.ID3D11Texture2D;
+                var texPtr = access.GetInterface(ref iidTex);
+                using var sourceTex = new ID3D11Texture2D(texPtr);
+                var desc = sourceTex.Description;
+
+                if (Volatile.Read(ref _isDisposed) != 0)
+                    return;
+
+                if (_staging is null || _staging.Description.Width != desc.Width || _staging.Description.Height != desc.Height)
+                {
+                    _staging?.Dispose();
+                    _staging = _device.CreateTexture2D(new Texture2DDescription
+                    {
+                        Width = desc.Width,
+                        Height = desc.Height,
+                        MipLevels = 1,
+                        ArraySize = 1,
+                        Format = desc.Format,
+                        SampleDescription = new SampleDescription(1, 0),
+                        Usage = ResourceUsage.Staging,
+                        CPUAccessFlags = CpuAccessFlags.Read,
+                    });
+                }
+
+                _context.CopyResource(_staging, sourceTex);
+                var map = _context.Map(_staging, 0, MapMode.Read, Vortice.Direct3D11.MapFlags.None);
+                try
+                {
+                    var copyW = Math.Min((int)desc.Width, Width);
+                    var copyH = Math.Min((int)desc.Height, Height);
+                    var rowBytes = copyW * 4;
+                    var destStride = Width * 4;
+                    lock (_lock)
+                    {
+                        CaptureNative.CopyMappedRows(
+                            map.DataPointer,
+                            checked((int)map.RowPitch),
+                            _latest,
+                            0,
+                            destStride,
+                            rowBytes,
+                            copyH);
+                        _hasFrame = true;
+                    }
+                }
+                finally
+                {
+                    _context.Unmap(_staging, 0);
+                }
+            }
+        }
+        catch (Exception ex)
+        {
+            if (Volatile.Read(ref _isDisposed) == 0)
+                Log.Warn($"Stream: frame processing error: {ex.Message}");
         }
         finally
         {
-            _context.Unmap(_staging, 0);
+            if (Interlocked.Decrement(ref _inFlight) == 0 && Volatile.Read(ref _isDisposed) != 0)
+            {
+                _drained.Set();
+            }
         }
     }
 
@@ -182,16 +236,26 @@ public sealed class WgcMonitorStream : IDisposable
 
     public void Dispose()
     {
-        if (_disposed)
+        if (Interlocked.Exchange(ref _isDisposed, 1) != 0)
             return;
-        _disposed = true;
+
         _framePool.FrameArrived -= OnFrameArrived;
         _session.Dispose();
         _framePool.Dispose();
+
+        // Drain any currently executing frame callback before releasing D3D resources.
+        if (Volatile.Read(ref _inFlight) > 0)
+        {
+            _drained.Wait(TimeSpan.FromSeconds(2));
+        }
+
         _staging?.Dispose();
         (_winrtDevice as IDisposable)?.Dispose();
         _context.Dispose();
         _device.Dispose();
+        _drained.Dispose();
         Log.Info("Stream: stopped.");
     }
+
+    internal void ProcessFrameForTest(Direct3D11CaptureFramePool pool) => OnFrameArrived(pool, null!);
 }

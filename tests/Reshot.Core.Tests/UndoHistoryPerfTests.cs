@@ -33,6 +33,8 @@ public sealed class UndoHistoryPerfTests
         Assert.Equal(0, evicted.RetainedBytes);
         Assert.Equal(IntPtr.Zero, GetBitmap(evicted, "_before").Handle);
         Assert.Equal(IntPtr.Zero, GetBitmap(evicted, "_after").Handle);
+        Assert.Throws<ObjectDisposedException>(() => evicted.Undo());
+        Assert.Throws<ObjectDisposedException>(() => evicted.Redo());
         Assert.Equal(SKColors.Red, layer.GetPixel(4, 4));
         Assert.True(history.CanUndo);
     }
@@ -252,6 +254,97 @@ public sealed class UndoHistoryPerfTests
     }
 
     [Fact]
+    public void History_rejects_reusing_a_command_instance()
+    {
+        using var history = new UndoHistory();
+        var command = new TrackingCommand();
+
+        history.Push(command);
+        Assert.Throws<InvalidOperationException>(() => history.Push(command));
+        Assert.True(history.Undo());
+        Assert.Throws<InvalidOperationException>(() => history.Push(command));
+
+        history.Dispose();
+        Assert.Equal(1, command.DisposeCount);
+    }
+
+    [Fact]
+    public void LayerRegionCommand_rejects_aliasing_its_owned_snapshots()
+    {
+        using var layer = NewLayer(8, 8, SKColors.Black);
+        using var snapshot = CaptureDocument.SnapshotRegion(layer, new SKRectI(0, 0, 8, 8));
+
+        Assert.Throws<ArgumentException>(() => new LayerRegionCommand(
+            layer, new SKRectI(0, 0, 8, 8), snapshot, snapshot));
+        Assert.NotEqual(IntPtr.Zero, snapshot.Handle);
+    }
+
+    [Fact]
+    public async Task Dispose_waits_for_an_in_progress_command_and_disposes_it_once()
+    {
+        using var history = new UndoHistory();
+        var entered = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var release = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var command = new BlockingCommand(entered, release);
+        history.Push(command);
+
+        var undo = Task.Run(() => history.Undo());
+        await entered.Task.WaitAsync(TimeSpan.FromSeconds(5));
+
+        var dispose = Task.Run(history.Dispose);
+        Assert.NotSame(dispose, await Task.WhenAny(dispose, Task.Delay(100)));
+        Assert.Equal(0, command.DisposeCount);
+
+        release.TrySetResult();
+        Assert.True(await undo.WaitAsync(TimeSpan.FromSeconds(5)));
+        await dispose.WaitAsync(TimeSpan.FromSeconds(5));
+        Assert.Equal(1, command.DisposeCount);
+    }
+
+    [Fact]
+    public void History_does_not_use_a_borrowed_layer_after_document_disposal()
+    {
+        var document = new CaptureDocument(8, 8);
+        var region = new SKRectI(0, 0, 8, 8);
+        var before = CaptureDocument.SnapshotRegion(document.PaintLayer, region);
+        SetPixel(document.PaintLayer, 2, 2, SKColors.Red);
+        var after = CaptureDocument.SnapshotRegion(document.PaintLayer, region);
+        var command = new LayerRegionCommand(document.PaintLayer, region, before, after);
+        using var history = new UndoHistory();
+        history.Push(command);
+
+        document.Dispose();
+        Assert.Throws<ObjectDisposedException>(() => history.Undo());
+        Assert.False(history.Redo());
+        Assert.Throws<ObjectDisposedException>(() => command.Redo());
+    }
+
+    [Fact]
+    public void Sparse_delta_round_trips_edge_cases_byte_exactly()
+    {
+        using var layer = NewLayer(8, 8, SKColors.Black);
+
+        AssertRoundTrip(layer, SKRectI.Empty, _ => { }, expectRaw: false);
+        AssertRoundTrip(layer, new SKRectI(0, 0, 8, 8), bitmap =>
+            SetPixel(bitmap, 3, 4, SKColors.Red), expectRaw: false);
+        AssertRoundTrip(layer, new SKRectI(0, 0, 8, 8), _ => { }, expectRaw: false);
+        AssertRoundTrip(layer, new SKRectI(0, 0, 8, 8), bitmap =>
+        {
+            using var canvas = new SKCanvas(bitmap);
+            canvas.Clear(SKColors.White);
+        }, expectRaw: true);
+        AssertRoundTrip(layer, new SKRectI(0, 0, 8, 8), bitmap =>
+        {
+            for (var y = 0; y < bitmap.Height; y++)
+            for (var x = 0; x < bitmap.Width; x++)
+                if ((x + y) % 2 == 0)
+                    SetPixel(bitmap, x, y, SKColors.Red);
+        }, expectRaw: true);
+        AssertRoundTrip(layer, new SKRectI(-2, -2, 6, 6), bitmap =>
+            SetPixel(bitmap, 0, 0, SKColors.Blue), expectRaw: false);
+    }
+
+    [Fact]
     public void Four_k_snapshot_profile_reports_raw_and_png_costs()
     {
         const int width = 3840;
@@ -361,6 +454,42 @@ public sealed class UndoHistoryPerfTests
         return bytes;
     }
 
+    private static void AssertRoundTrip(SKBitmap layer, SKRectI region,
+        Action<SKBitmap> mutate, bool expectRaw)
+    {
+        using var before = CaptureDocument.SnapshotRegion(layer, region);
+        var beforeBytes = SnapshotBytes(before);
+        mutate(layer);
+        using var after = CaptureDocument.SnapshotRegion(layer, region);
+        var afterBytes = SnapshotBytes(after);
+        var rawBytes = (long)before.ByteCount + after.ByteCount;
+
+        using var roundTrip = new LayerRegionCommand(
+            layer, region,
+            CopyBitmap(before),
+            CopyBitmap(after));
+
+        Assert.True(roundTrip.RetainedBytes <= rawBytes);
+        if (expectRaw)
+            Assert.Null(GetBitmapOrNull(roundTrip, "_runs"));
+
+        roundTrip.Undo();
+        using var restoredBefore = CaptureDocument.SnapshotRegion(layer, region);
+        Assert.Equal(beforeBytes, SnapshotBytes(restoredBefore));
+        roundTrip.Redo();
+        using var restoredAfter = CaptureDocument.SnapshotRegion(layer, region);
+        Assert.Equal(afterBytes, SnapshotBytes(restoredAfter));
+    }
+
+    private static SKBitmap CopyBitmap(SKBitmap source)
+    {
+        var copy = new SKBitmap(new SKImageInfo(
+            source.Width, source.Height, SKColorType.Bgra8888, SKAlphaType.Premul));
+        using var canvas = new SKCanvas(copy);
+        canvas.DrawBitmap(source, 0, 0);
+        return copy;
+    }
+
     private sealed class TrackingCommand : IUndoableCommand
     {
         private int _disposeCount;
@@ -368,6 +497,31 @@ public sealed class UndoHistoryPerfTests
         public int DisposeCount => Volatile.Read(ref _disposeCount);
 
         public void Undo() { }
+        public void Redo() { }
+
+        public void Dispose() => Interlocked.Increment(ref _disposeCount);
+    }
+
+    private sealed class BlockingCommand : IUndoableCommand
+    {
+        private readonly TaskCompletionSource _entered;
+        private readonly TaskCompletionSource _release;
+        private int _disposeCount;
+
+        public BlockingCommand(TaskCompletionSource entered, TaskCompletionSource release)
+        {
+            _entered = entered;
+            _release = release;
+        }
+
+        public int DisposeCount => Volatile.Read(ref _disposeCount);
+
+        public void Undo()
+        {
+            _entered.TrySetResult();
+            _release.Task.GetAwaiter().GetResult();
+        }
+
         public void Redo() { }
 
         public void Dispose() => Interlocked.Increment(ref _disposeCount);

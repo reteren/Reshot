@@ -108,12 +108,17 @@ if ($LASTEXITCODE -ne 0) { Fail 'Tests failed; refusing to package.' }
 # The portable ZIP and Inno Setup installer compress the binary anyway (yielding
 # virtually identical ~74 MB download sizes), so bundle-internal compression is purely
 # a runtime penalty. Pass -CompressedSingleFile if disk space is strictly prioritized.
-Step 'Publishing reshot.exe (self-contained x64, uncompressed single-file default)'
+#
+# The value is materialised into its own variable first: in argument mode PowerShell
+# expands `$CompressedSingleFile.IsPresent` as an expandable string, yielding the literal
+# `False.IsPresent`, which MSBuild reads as a non-boolean and silently ignores.
+$compressSingleFile = if ($CompressedSingleFile) { 'true' } else { 'false' }
+Step "Publishing reshot.exe (self-contained x64, single-file, compression=$compressSingleFile)"
 dotnet publish (Join-Path $repo 'src/Reshot.App/Reshot.App.csproj') `
     -c Release -r win-x64 --self-contained true `
     -p:PublishSingleFile=true `
     -p:IncludeNativeLibrariesForSelfExtract=true `
-    -p:EnableCompressionInSingleFile=$CompressedSingleFile.IsPresent `
+    -p:EnableCompressionInSingleFile=$compressSingleFile `
     -p:DebugType=none `
     -o $stage --nologo
 if ($LASTEXITCODE -ne 0) { Fail 'dotnet publish failed.' }

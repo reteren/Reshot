@@ -229,6 +229,11 @@ public sealed class CaptureDocument : IDisposable
     /// <summary>Overwrites a region of a layer with a snapshot (undo/redo).</summary>
     public static void RestoreRegion(SKBitmap layer, SKRectI region, SKBitmap snapshot)
     {
+        if (layer.Handle == IntPtr.Zero)
+            throw new ObjectDisposedException(nameof(layer));
+        if (snapshot.Handle == IntPtr.Zero)
+            throw new ObjectDisposedException(nameof(snapshot));
+
         var clipped = ClipRegion(layer, region);
         if (clipped.IsEmpty)
             return;

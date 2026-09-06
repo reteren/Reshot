@@ -1,4 +1,4 @@
-using System.IO;
+﻿using System.IO;
 using System.Windows;
 using Reshot.App.Input;
 using Reshot.App.Interop;
@@ -37,6 +37,10 @@ public partial class App : System.Windows.Application
     private string? _audioRecordingPath;
     private bool _recording;
     private bool _audioRecording;
+    private bool _shuttingDown;
+
+    /// <summary>Finalizes a take whose audio-track prompt is still open, if the app exits first.</summary>
+    private Action? _pendingFinish;
     private Radial.RadialMenuWindow? _radial;
     private System.Windows.Threading.DispatcherTimer? _holdTimer;
     private DateTime _hotkeyDownAt;
@@ -70,6 +74,11 @@ public partial class App : System.Windows.Application
             if (to != SessionState.Idle)
                 unchecked { _cleanupGeneration++; }
         };
+
+        // The frame pool drops its retained buffer on a timer thread that knows nothing about
+        // what the app is doing. Compacting is decided here instead, behind the same session
+        // gate as every other post-capture cleanup, so it cannot land inside a recording.
+        CapturedFrame.PoolWentIdle += () => Dispatcher.BeginInvoke(new Action(SchedulePostCaptureCleanup));
 
         // 2. Single instance, a second launch signals the first and exits.
         _singleInstance = new SingleInstance();
@@ -631,8 +640,15 @@ public partial class App : System.Windows.Application
         try { recorder.Stop(); }
         catch (Exception ex) { Log.Error("Error stopping recording", ex); }
 
+        // Taken now, while it still belongs to this take. The prompt below is modeless, so a
+        // new recording can start and overwrite the field before the user answers it.
+        var path = _recordingPath;
+        _recordingPath = null;
+
         var settings = _settingsService?.Current;
-        var ask = settings?.Video.Audio.AskOnSave ?? false;
+        // Asking on the way out would strand the take: the prompt is modeless, so OnExit
+        // walks straight past it and the temp video is never muxed into the final MP4.
+        var ask = !_shuttingDown && (settings?.Video.Audio.AskOnSave ?? false);
         var hasAudio = recorder.HasSystemTrack || recorder.HasMicTrack;
         Log.Info($"Recording stopped: askOnSave={ask}, system={recorder.HasSystemTrack}, " +
                  $"mic={recorder.HasMicTrack} → {(ask && hasAudio ? "showing track prompt" : "saving directly")}.");
@@ -642,6 +658,19 @@ public partial class App : System.Windows.Application
             var prompt = new Recording.AudioTrackPrompt(
                 recorder.HasSystemTrack, recorder.HasMicTrack,
                 settings!.Video.Audio.System, settings.Video.Audio.Mic);
+            // Both the answer and the exit path lead here, and closing the prompt during
+            // shutdown raises Decided as well, so whichever arrives first wins and the
+            // second one finds the take already muxed and its temps already deleted.
+            var finished = false;
+            void FinishOnce(bool keepSystem, bool keepMic)
+            {
+                if (finished)
+                    return;
+                finished = true;
+                _pendingFinish = null;
+                FinishRecording(recorder, path, keepSystem, keepMic);
+            }
+
             prompt.Decided += (keepSystem, keepMic, never) =>
             {
                 if (never && _settingsService is not null)
@@ -649,20 +678,25 @@ public partial class App : System.Windows.Application
                     _settingsService.Current.Video.Audio.AskOnSave = false;
                     _settingsService.Save();
                 }
-                FinishRecording(recorder, keepSystem, keepMic);
+                FinishOnce(keepSystem, keepMic);
             };
+
+            // Quitting with the prompt still open used to take the recording with it: the app
+            // is no longer 'recording', so shutdown had nothing left to finish. Keep both
+            // tracks in that case — losing the take is the only outcome worse than keeping
+            // audio the user might have dropped.
+            _pendingFinish = () => FinishOnce(recorder.HasSystemTrack, recorder.HasMicTrack);
             prompt.Show();
             return;
         }
 
-        FinishRecording(recorder, recorder.HasSystemTrack, recorder.HasMicTrack);
+        FinishRecording(recorder, path, recorder.HasSystemTrack, recorder.HasMicTrack);
     }
 
     /// <summary>Muxes the chosen audio tracks into the final MP4 and reports the result.</summary>
-    private void FinishRecording(Reshot.Recording.VideoRecorder recorder, bool keepSystem, bool keepMic)
+    private void FinishRecording(
+        Reshot.Recording.VideoRecorder recorder, string? path, bool keepSystem, bool keepMic)
     {
-        var path = _recordingPath;
-        _recordingPath = null;
 
         try
         {
@@ -1074,8 +1108,12 @@ public partial class App : System.Windows.Application
     protected override void OnExit(ExitEventArgs e)
     {
         Log.Info("Shutdown: cleaning up.");
+        _shuttingDown = true;
         if (_recording)
             StopRecording();
+        var pending = _pendingFinish;
+        _pendingFinish = null;
+        pending?.Invoke();
         if (_audioRecording)
             StopAudioRecording();
         _audioHotkey?.Dispose();

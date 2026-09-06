@@ -37,6 +37,12 @@ public sealed class LayerRegionCommand : IUndoableCommand
     /// </summary>
     public LayerRegionCommand(SKBitmap layer, SKRectI region, SKBitmap before, SKBitmap after)
     {
+        ArgumentNullException.ThrowIfNull(layer);
+        ArgumentNullException.ThrowIfNull(before);
+        ArgumentNullException.ThrowIfNull(after);
+        if (ReferenceEquals(before, after))
+            throw new ArgumentException("Before and after snapshots must be distinct bitmaps.", nameof(after));
+
         _layer = layer;
         _region = region;
         _snapshotOriginX = Math.Clamp(region.Left, 0, layer.Width);
@@ -98,6 +104,7 @@ public sealed class LayerRegionCommand : IUndoableCommand
 
     private void ApplyRuns(bool useBefore)
     {
+        ThrowIfLayerDisposed();
         var pixels = _layer.GetPixels();
         foreach (var run in _runs!)
         {
@@ -107,6 +114,12 @@ public sealed class LayerRegionCommand : IUndoableCommand
             Marshal.Copy(useBefore ? run.Before : run.After, 0,
                 IntPtr.Add(pixels, offset), run.Before.Length);
         }
+    }
+
+    private void ThrowIfLayerDisposed()
+    {
+        if (_layer.Handle == IntPtr.Zero)
+            throw new ObjectDisposedException(nameof(_layer));
     }
 
     private static bool TryBuildDelta(SKBitmap before, SKBitmap after,

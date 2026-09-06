@@ -5,6 +5,11 @@ using Reshot.Core.Diagnostics;
 
 namespace Reshot.Recording;
 
+internal interface IVideoFrameWriter : IDisposable
+{
+    void WriteFrame(byte[] buffer);
+}
+
 /// <summary>
 /// Records a screen rectangle to an MP4 (ARCHITECTURE §9). A
 /// <see cref="WgcMonitorStream"/> supplies live frames; a video thread pulls the crop at
@@ -18,10 +23,18 @@ namespace Reshot.Recording;
 /// </summary>
 public sealed class VideoRecorder : IDisposable
 {
+    private sealed class Mp4VideoEncoderAdapter : IVideoFrameWriter
+    {
+        private readonly Mp4VideoEncoder _encoder;
+        public Mp4VideoEncoderAdapter(Mp4VideoEncoder encoder) => _encoder = encoder;
+        public void WriteFrame(byte[] buffer) => _encoder.WriteFrame(buffer);
+        public void Dispose() => _encoder.Dispose();
+    }
+
     private const int AudioMaxChunkFrames = 4800; // ~100 ms at 48 kHz
 
     private WgcMonitorStream? _stream;
-    private Mp4VideoEncoder? _encoder;
+    private IVideoFrameWriter? _encoder;
     private readonly AudioCaptureMixer? _systemAudio;
     private readonly AudioCaptureMixer? _micAudio;
     private FileStream? _systemPcm;
@@ -41,6 +54,11 @@ public sealed class VideoRecorder : IDisposable
     private int _stopInitiated;
     private int _timerPeriodRaised;
     private bool _disposed;
+    private bool _workerTerminated;
+
+    internal TimeSpan WorkerCooperativeTimeout { get; set; } = TimeSpan.FromSeconds(1);
+    internal TimeSpan WorkerDrainTimeout { get; set; } = TimeSpan.FromSeconds(5);
+    internal bool IsWorkerTerminated => _workerTerminated;
 
     private readonly Action<uint> _timeBegin;
     private readonly Action<uint> _timeEnd;
@@ -80,7 +98,7 @@ public sealed class VideoRecorder : IDisposable
         int fps, int bitrate, string path,
         AudioSources sources,
         byte[]? shapeMask = null, int maskStride = 0)
-        : this(capture, rectLeft, rectTop, rectWidth, rectHeight, fps, bitrate, path, sources, shapeMask, maskStride, null, null)
+        : this(capture, rectLeft, rectTop, rectWidth, rectHeight, fps, bitrate, path, sources, shapeMask, maskStride, null, null, null)
     {
     }
 
@@ -91,6 +109,18 @@ public sealed class VideoRecorder : IDisposable
         AudioSources sources,
         byte[]? shapeMask, int maskStride,
         Action<uint>? timeBegin, Action<uint>? timeEnd)
+        : this(capture, rectLeft, rectTop, rectWidth, rectHeight, fps, bitrate, path, sources, shapeMask, maskStride, timeBegin, timeEnd, null)
+    {
+    }
+
+    internal VideoRecorder(
+        IScreenCaptureService capture,
+        int rectLeft, int rectTop, int rectWidth, int rectHeight,
+        int fps, int bitrate, string path,
+        AudioSources sources,
+        byte[]? shapeMask, int maskStride,
+        Action<uint>? timeBegin, Action<uint>? timeEnd,
+        Func<string, int, int, int, int, IVideoFrameWriter>? encoderFactory)
     {
         _timeBegin = timeBegin ?? (ms => TimeBeginPeriod(ms));
         _timeEnd = timeEnd ?? (ms => TimeEndPeriod(ms));
@@ -143,7 +173,9 @@ public sealed class VideoRecorder : IDisposable
             }
 
             // Video-only: the audio track is added by the muxer once the tracks are chosen.
-            _encoder = new Mp4VideoEncoder(_tempVideoPath, _cropWidth, _cropHeight, fps, bitrate, null);
+            _encoder = encoderFactory is not null
+                ? encoderFactory(_tempVideoPath, _cropWidth, _cropHeight, fps, bitrate)
+                : new Mp4VideoEncoderAdapter(new Mp4VideoEncoder(_tempVideoPath, _cropWidth, _cropHeight, fps, bitrate, null));
 
             _videoThread = new Thread(VideoLoop) { IsBackground = true, Name = "reshot-video" };
             _videoThread.Start();
@@ -345,22 +377,78 @@ public sealed class VideoRecorder : IDisposable
         {
             _stop = true;
             _started.Set();
-            _videoThread?.Join(TimeSpan.FromSeconds(5));
-            _audioThread?.Join(TimeSpan.FromSeconds(5));
 
-            _encoder?.Dispose(); // finalizes the temp MP4
-            _systemAudio?.Dispose();
-            _micAudio?.Dispose();
-            _systemPcm?.Dispose();
-            _micPcm?.Dispose();
-            _systemPcm = null;
-            _micPcm = null;
-            _stream?.Dispose();
+            // Phase 1: cooperative shutdown wait.
+            var cleanlyTerminated = WaitForWorkerTermination(WorkerCooperativeTimeout);
+            if (!cleanlyTerminated)
+            {
+                Log.Warn("Recorder: worker threads did not exit within cooperative timeout; forcing encoder shutdown to unblock pipes.");
+                SafeShutdownEncoder();
+                cleanlyTerminated = WaitForWorkerTermination(WorkerDrainTimeout);
+                if (!cleanlyTerminated)
+                {
+                    Log.Error("Recorder: worker threads failed to terminate within drain timeout.");
+                }
+            }
+            else
+            {
+                SafeShutdownEncoder();
+            }
+
+            if (cleanlyTerminated)
+            {
+                _systemAudio?.Dispose();
+                _micAudio?.Dispose();
+                _systemPcm?.Dispose();
+                _micPcm?.Dispose();
+                _systemPcm = null;
+                _micPcm = null;
+                _stream?.Dispose();
+                _stream = null;
+            }
         }
         finally
         {
             EnsureTimerResolutionRestored();
         }
+    }
+
+    private void SafeShutdownEncoder()
+    {
+        try
+        {
+            _encoder?.Dispose();
+        }
+        catch (Exception ex)
+        {
+            Log.Warn($"Recorder: encoder dispose failed: {ex.Message}");
+        }
+        finally
+        {
+            _encoder = null;
+        }
+    }
+
+    private bool WaitForWorkerTermination(TimeSpan timeout)
+    {
+        var sw = Stopwatch.StartNew();
+
+        if (_videoThread is not null && _videoThread.IsAlive)
+        {
+            var remaining = timeout - sw.Elapsed;
+            if (remaining <= TimeSpan.Zero || !_videoThread.Join(remaining))
+                return false;
+        }
+
+        if (_audioThread is not null && _audioThread.IsAlive)
+        {
+            var remaining = timeout - sw.Elapsed;
+            if (remaining <= TimeSpan.Zero || !_audioThread.Join(remaining))
+                return false;
+        }
+
+        _workerTerminated = true;
+        return true;
     }
 
     [DllImport("winmm.dll", EntryPoint = "timeBeginPeriod")]
@@ -376,6 +464,12 @@ public sealed class VideoRecorder : IDisposable
     public bool Finish(bool keepSystem, bool keepMic)
     {
         Stop();
+
+        if (!_workerTerminated)
+        {
+            Log.Error("Recorder: cannot finish recording because worker threads failed to terminate.");
+            return false;
+        }
 
         if (_tempVideoPath is null)
             return false;

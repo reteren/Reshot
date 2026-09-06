@@ -23,6 +23,11 @@ public sealed class UndoHistory : IDisposable
 
     private readonly LinkedList<IUndoableCommand> _undo = new();
     private readonly Stack<IUndoableCommand> _redo = new();
+    // Keep every command admitted for this history until final disposal. This prevents a
+    // command removed from redo or evicted from undo from being re-admitted after its state
+    // has already been released.
+    private readonly HashSet<IUndoableCommand> _ownedCommands =
+        new(ReferenceEqualityComparer.Instance);
     private readonly object _gate = new();
     private bool _disposed;
 
@@ -49,6 +54,10 @@ public sealed class UndoHistory : IDisposable
         lock (_gate)
         {
             ObjectDisposedException.ThrowIf(_disposed, this);
+            ArgumentNullException.ThrowIfNull(command);
+            if (!_ownedCommands.Add(command))
+                throw new InvalidOperationException("The command is already owned by this history.");
+
             _undo.AddLast(command);
             while (_undo.Count > MaxDepth)
             {
@@ -105,6 +114,7 @@ public sealed class UndoHistory : IDisposable
 
             _undo.Clear();
             _redo.Clear();
+            _ownedCommands.Clear();
         }
     }
 
