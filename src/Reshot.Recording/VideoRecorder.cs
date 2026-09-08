@@ -35,8 +35,8 @@ public sealed class VideoRecorder : IDisposable
 
     private WgcMonitorStream? _stream;
     private IVideoFrameWriter? _encoder;
-    private readonly AudioCaptureMixer? _systemAudio;
-    private readonly AudioCaptureMixer? _micAudio;
+    private AudioCaptureMixer? _systemAudio;
+    private AudioCaptureMixer? _micAudio;
     private FileStream? _systemPcm;
     private FileStream? _micPcm;
     private readonly string? _tempVideoPath;
@@ -54,11 +54,27 @@ public sealed class VideoRecorder : IDisposable
     private int _stopInitiated;
     private int _timerPeriodRaised;
     private bool _disposed;
-    private bool _workerTerminated;
+    private volatile bool _workerTerminated;
 
     internal TimeSpan WorkerCooperativeTimeout { get; set; } = TimeSpan.FromSeconds(1);
     internal TimeSpan WorkerDrainTimeout { get; set; } = TimeSpan.FromSeconds(5);
     internal bool IsWorkerTerminated => _workerTerminated;
+    internal TimeSpan ReaperTimeout { get; set; } = TimeSpan.FromSeconds(15);
+
+    private readonly object _reaperLock = new();
+    private Task? _reaperTask;
+    internal Task? ReaperTask
+    {
+        get
+        {
+            lock (_reaperLock) return _reaperTask;
+        }
+    }
+
+    internal string? TempVideoPath => _tempVideoPath;
+    internal string? SystemPcmPath => _systemPcmPath;
+    internal string? MicPcmPath => _micPcmPath;
+    internal WgcMonitorStream? Stream => _stream;
 
     private readonly Action<uint> _timeBegin;
     private readonly Action<uint> _timeEnd;
@@ -406,11 +422,113 @@ public sealed class VideoRecorder : IDisposable
                 _stream?.Dispose();
                 _stream = null;
             }
+            else
+            {
+                EnsureReaperStarted();
+            }
         }
         finally
         {
             EnsureTimerResolutionRestored();
         }
+    }
+
+    private void EnsureReaperStarted()
+    {
+        lock (_reaperLock)
+        {
+            if (_reaperTask is not null)
+                return;
+
+            var videoThread = _videoThread;
+            var audioThread = _audioThread;
+            var stream = _stream;
+            var systemAudio = _systemAudio;
+            var micAudio = _micAudio;
+            var systemPcm = _systemPcm;
+            var micPcm = _micPcm;
+            var tempFiles = new[] { _tempVideoPath, _systemPcmPath, _micPcmPath };
+            var timeout = ReaperTimeout;
+
+            _stream = null;
+            _systemAudio = null;
+            _micAudio = null;
+            _systemPcm = null;
+            _micPcm = null;
+
+            _reaperTask = Task.Run(() => ReapSurvivingResources(
+                videoThread, audioThread, stream, systemAudio, micAudio, systemPcm, micPcm, tempFiles, timeout));
+        }
+    }
+
+    private static void ReapSurvivingResources(
+        Thread? videoThread,
+        Thread? audioThread,
+        WgcMonitorStream? stream,
+        AudioCaptureMixer? systemAudio,
+        AudioCaptureMixer? micAudio,
+        FileStream? systemPcm,
+        FileStream? micPcm,
+        string?[] tempFiles,
+        TimeSpan timeout)
+    {
+        var sw = Stopwatch.StartNew();
+
+        if (videoThread is not null && videoThread.IsAlive)
+        {
+            var remaining = timeout - sw.Elapsed;
+            if (remaining > TimeSpan.Zero)
+            {
+                if (!videoThread.Join(remaining))
+                {
+                    Log.Warn("Recorder reaper: video worker thread did not terminate within reaper timeout.");
+                }
+            }
+        }
+
+        if (audioThread is not null && audioThread.IsAlive)
+        {
+            var remaining = timeout - sw.Elapsed;
+            if (remaining > TimeSpan.Zero)
+            {
+                if (!audioThread.Join(remaining))
+                {
+                    Log.Warn("Recorder reaper: audio worker thread did not terminate within reaper timeout.");
+                }
+            }
+        }
+
+        try { stream?.Dispose(); }
+        catch (Exception ex) { Log.Warn($"Recorder reaper: stream dispose failed: {ex.Message}"); }
+
+        try { systemAudio?.Dispose(); }
+        catch (Exception ex) { Log.Warn($"Recorder reaper: systemAudio dispose failed: {ex.Message}"); }
+
+        try { micAudio?.Dispose(); }
+        catch (Exception ex) { Log.Warn($"Recorder reaper: micAudio dispose failed: {ex.Message}"); }
+
+        try { systemPcm?.Dispose(); }
+        catch (Exception ex) { Log.Warn($"Recorder reaper: systemPcm dispose failed: {ex.Message}"); }
+
+        try { micPcm?.Dispose(); }
+        catch (Exception ex) { Log.Warn($"Recorder reaper: micPcm dispose failed: {ex.Message}"); }
+
+        foreach (var path in tempFiles)
+        {
+            if (path is null)
+                continue;
+            try
+            {
+                if (File.Exists(path))
+                    File.Delete(path);
+            }
+            catch (Exception ex)
+            {
+                Log.Warn($"Recorder reaper: could not delete temp '{path}': {ex.Message}");
+            }
+        }
+
+        Log.Info("Recorder reaper: surviving resources and temp files cleaned up.");
     }
 
     private void SafeShutdownEncoder()
@@ -468,6 +586,7 @@ public sealed class VideoRecorder : IDisposable
         if (!_workerTerminated)
         {
             Log.Error("Recorder: cannot finish recording because worker threads failed to terminate.");
+            EnsureReaperStarted();
             return false;
         }
 
@@ -510,6 +629,14 @@ public sealed class VideoRecorder : IDisposable
         try
         {
             Stop();
+            if (_workerTerminated)
+            {
+                CleanupTemps();
+            }
+            else
+            {
+                EnsureReaperStarted();
+            }
         }
         finally
         {

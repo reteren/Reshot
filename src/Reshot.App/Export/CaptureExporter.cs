@@ -68,28 +68,51 @@ public sealed class CaptureExporter
         return rtb;
     }
 
-    public bool CopyToClipboard(BitmapSource image)
+    /// <summary>
+    /// Copies on a dedicated STA so PNG/DIB materialisation and OLE clipboard ownership do not
+    /// block the overlay dispatcher. The source image is frozen by the export path before this
+    /// method is called, so it is safe to consume from the worker thread.
+    /// </summary>
+    public Task<bool> CopyToClipboardAsync(BitmapSource image)
     {
-        // Clipboard access can transiently fail if another app holds it; retry a few times.
-        for (var attempt = 0; attempt < 3; attempt++)
+        var result = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
+        var thread = new Thread(() =>
         {
             try
             {
-                Clipboard.SetDataObject(BuildClipboardData(image), copy: true);
-                Log.Info("Export: copied selection to clipboard.");
-                return true;
-            }
-            catch (Exception ex) when (attempt < 2)
-            {
-                Log.Warn($"Export: clipboard busy (attempt {attempt + 1}): {ex.Message}");
-                Thread.Sleep(40);
+                result.SetResult(CopyToClipboardOnSta(image));
             }
             catch (Exception ex)
             {
-                Log.Error("Export: failed to copy to clipboard", ex);
+                Log.Error("Export: clipboard worker failed", ex);
+                result.SetResult(false);
             }
+        })
+        {
+            IsBackground = true,
+            Name = "Reshot clipboard export",
+        };
+        thread.SetApartmentState(ApartmentState.STA);
+        thread.Start();
+        return result.Task;
+    }
+
+    private bool CopyToClipboardOnSta(BitmapSource image)
+    {
+        // WPF itself retries ten times at 100 ms intervals before reporting a busy clipboard.
+        // An outer retry would stack another full WPF wait and make a transient contention
+        // last several seconds without improving the eventual clipboard ownership.
+        try
+        {
+            Clipboard.SetDataObject(BuildClipboardData(image), copy: true);
+            Log.Info("Export: copied selection to clipboard.");
+            return true;
         }
-        return false;
+        catch (Exception ex)
+        {
+            Log.Warn($"Export: clipboard busy or unavailable: {ex.Message}");
+            return false;
+        }
     }
 
     /// <summary>

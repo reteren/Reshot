@@ -221,6 +221,29 @@ public sealed class UndoHistoryPerfTests
     }
 
     [Fact]
+    public void Evicted_commands_are_not_retained_by_history()
+    {
+        using var history = new UndoHistory();
+        var references = new List<WeakReference>();
+        IUndoableCommand? command = null;
+
+        for (var i = 0; i < 5000; i++)
+        {
+            command = new TrackingCommand();
+            references.Add(new WeakReference(command));
+            history.Push(command);
+        }
+
+        command = null;
+        GC.Collect();
+        GC.WaitForPendingFinalizers();
+        GC.Collect();
+
+        var alive = references.Count(reference => reference.IsAlive);
+        Assert.InRange(alive, 1, 32);
+    }
+
+    [Fact]
     public void History_serializes_dispose_against_undo_redo_and_disposes_each_command_once()
     {
         using var history = new UndoHistory();

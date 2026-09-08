@@ -1,3 +1,5 @@
+using System.Runtime.CompilerServices;
+
 namespace Reshot.Core.History;
 
 /// <summary>A reversible edit (ARCHITECTURE §5).</summary>
@@ -23,11 +25,11 @@ public sealed class UndoHistory : IDisposable
 
     private readonly LinkedList<IUndoableCommand> _undo = new();
     private readonly Stack<IUndoableCommand> _redo = new();
-    // Keep every command admitted for this history until final disposal. This prevents a
-    // command removed from redo or evicted from undo from being re-admitted after its state
-    // has already been released.
-    private readonly HashSet<IUndoableCommand> _ownedCommands =
-        new(ReferenceEqualityComparer.Instance);
+    // Track identity without keeping discarded commands alive. A caller retaining a disposed
+    // command still finds its entry and cannot re-admit it, while abandoned commands and their
+    // snapshot buffers become collectible once they leave undo and redo.
+    private readonly ConditionalWeakTable<IUndoableCommand, object> _ownedCommands = new();
+    private static readonly object OwnershipMarker = new();
     private readonly object _gate = new();
     private bool _disposed;
 
@@ -55,8 +57,9 @@ public sealed class UndoHistory : IDisposable
         {
             ObjectDisposedException.ThrowIf(_disposed, this);
             ArgumentNullException.ThrowIfNull(command);
-            if (!_ownedCommands.Add(command))
+            if (_ownedCommands.TryGetValue(command, out _))
                 throw new InvalidOperationException("The command is already owned by this history.");
+            _ownedCommands.Add(command, OwnershipMarker);
 
             _undo.AddLast(command);
             while (_undo.Count > MaxDepth)
@@ -114,7 +117,6 @@ public sealed class UndoHistory : IDisposable
 
             _undo.Clear();
             _redo.Clear();
-            _ownedCommands.Clear();
         }
     }
 

@@ -35,11 +35,14 @@ public sealed class WgcMonitorStream : IDisposable
     private readonly object _lock = new();
     private volatile bool _hasFrame;
     private int _isDisposed;
+    private int _d3dDisposed;
     private int _inFlight;
     private readonly ManualResetEventSlim _drained = new(false);
 
     internal int InFlightCallbacks => Volatile.Read(ref _inFlight);
     internal bool IsDisposed => Volatile.Read(ref _isDisposed) != 0;
+    internal bool IsD3DDisposed => Volatile.Read(ref _d3dDisposed) != 0;
+    internal TimeSpan DrainTimeout { get; set; } = TimeSpan.FromSeconds(2);
     internal Action? FrameProcessingStarting { get; set; }
 
     /// <summary>Monitor origin in virtual-screen coordinates.</summary>
@@ -204,8 +207,24 @@ public sealed class WgcMonitorStream : IDisposable
             if (Interlocked.Decrement(ref _inFlight) == 0 && Volatile.Read(ref _isDisposed) != 0)
             {
                 _drained.Set();
+                TearDownD3DResources();
             }
         }
+    }
+
+    private void TearDownD3DResources()
+    {
+        if (Interlocked.Exchange(ref _d3dDisposed, 1) != 0)
+            return;
+
+        lock (_lock)
+        {
+            _staging?.Dispose();
+            _staging = null;
+        }
+        (_winrtDevice as IDisposable)?.Dispose();
+        _context.Dispose();
+        _device.Dispose();
     }
 
     /// <summary>
@@ -246,14 +265,27 @@ public sealed class WgcMonitorStream : IDisposable
         // Drain any currently executing frame callback before releasing D3D resources.
         if (Volatile.Read(ref _inFlight) > 0)
         {
-            _drained.Wait(TimeSpan.FromSeconds(2));
+            _drained.Wait(DrainTimeout);
         }
 
-        _staging?.Dispose();
-        (_winrtDevice as IDisposable)?.Dispose();
-        _context.Dispose();
-        _device.Dispose();
-        _drained.Dispose();
+        // If callbacks drained completely, tear down D3D resources immediately.
+        // If the wait timed out (e.g. driver/GPU stall), DO NOT touch D3D resources here;
+        // the in-flight callback will invoke TearDownD3DResources() when it exits, preventing
+        // use-after-free native access violations while avoiding an unbounded wait that hangs the UI.
+        if (Volatile.Read(ref _inFlight) == 0)
+        {
+            TearDownD3DResources();
+        }
+        else
+        {
+            Log.Warn("Stream: frame callback did not drain within timeout; deferring D3D resource teardown to exiting callback.");
+        }
+
+        // _drained is deliberately not disposed. The frame pool is free-threaded, so a
+        // callback can already be queued and not yet running when the counter reads zero;
+        // it will still reach Set() after we return, and setting a disposed event throws
+        // on the capture thread at exactly the moment the user is stopping a recording.
+        // One small managed handle left to the GC is the cheaper half of that trade.
         Log.Info("Stream: stopped.");
     }
 

@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using System.Diagnostics;
+using System.Linq;
 using System.Security.Cryptography;
 using System.Windows;
 using Reshot.Capture;
@@ -43,6 +44,54 @@ public sealed class HarnessSceneResult
         }
         return diffs;
     }
+}
+
+/// <summary>
+/// Comparison result evaluating baseline, production fix (7595ad3), unfixed (pre-fix t29),
+/// and exact bounds (unioned but unsnapped) to verify regression detection and snap costs.
+/// </summary>
+public sealed class OutsideCursorTestResult
+{
+    public required string SceneName { get; init; }
+    public required double DpiScale { get; init; }
+    public required float BrushThickness { get; init; }
+    public required int CursorX { get; init; }
+    public required int CursorY { get; init; }
+    public required HarnessSceneResult Baseline { get; init; }
+    public required HarnessSceneResult Production { get; init; }
+    public required HarnessSceneResult Unfixed { get; init; }
+    public required HarnessSceneResult ExactNoSnap { get; init; }
+
+    public bool ProductionMatchesBaseline => Baseline.Sha256Hex == Production.Sha256Hex;
+    public int ProductionDiffPixels => Baseline.DiffPixelsAgainst(Production);
+
+    public bool UnfixedMatchesBaseline => Baseline.Sha256Hex == Unfixed.Sha256Hex;
+    public int UnfixedDiffPixels => Baseline.DiffPixelsAgainst(Unfixed);
+
+    public bool SnapMatchesExact => Production.Sha256Hex == ExactNoSnap.Sha256Hex;
+    public int SnapDiffPixelsAgainstExact => ExactNoSnap.DiffPixelsAgainst(Production);
+
+    public int ExactBytes => ExactNoSnap.BufferBytesPerRepaint;
+    public int SnappedBytes => Production.BufferBytesPerRepaint;
+    public int UnfixedBytes => Unfixed.BufferBytesPerRepaint;
+    public int BaselineBytes => Baseline.BufferBytesPerRepaint;
+
+    public int SnapOverheadBytes => SnappedBytes - ExactBytes;
+    public double SnapOverheadPercent => ExactBytes == 0 ? 0 : ((double)SnapOverheadBytes / ExactBytes) * 100.0;
+}
+
+/// <summary>
+/// Audit metrics for the pristine capture state (Job 2).
+/// </summary>
+public sealed class PristineCaptureAuditResult
+{
+    public required double DpiScale { get; init; }
+    public required bool ShouldRenderDrawSurface { get; init; }
+    public required Visibility DrawSurfaceVisibility { get; init; }
+    public required int DrawSurfacePixelWidth { get; init; }
+    public required int DrawSurfacePixelHeight { get; init; }
+    public required int BufferBytesPerRepaint { get; init; }
+    public required bool IsZeroCost { get; init; }
 }
 
 public partial class OverlayWindow
@@ -228,6 +277,41 @@ public partial class OverlayWindow
         _brushCursorVisible = true;
     }
 
+    /// <summary>
+    /// Executes a test scene placing the cursor outside the selection with the Draw tool active.
+    /// This targets the boundary case where cursor coordinates depart the selection rectangle.
+    /// </summary>
+    public void ExecuteCursorOutsideSelectionScript(
+        int selX, int selY, int selW, int selH,
+        int cursorX, int cursorY,
+        float brushThickness = 16f,
+        bool commitStroke = true)
+    {
+        _committed.Clear();
+        _selection = new Selection
+        {
+            Kind = ShapeKind.Rectangle,
+            Bounds = new Rect(selX / _dpiScaleX, selY / _dpiScaleY, selW / _dpiScaleX, selH / _dpiScaleY)
+        };
+
+        _tool = ToolMode.Draw;
+        _drawSub = DrawSubTool.Brush;
+        _brush.Color = new SKColor(0xFF, 0x3B, 0x30);
+        _brush.Thickness = brushThickness;
+        _brush.Opacity = 1f;
+
+        if (commitStroke)
+        {
+            BeginBrush(new Point((selX + 40) / _dpiScaleX, (selY + 40) / _dpiScaleY));
+            _cursorPhysical = ToSkPhysical(new Point((selX + 120) / _dpiScaleX, (selY + 80) / _dpiScaleY));
+            _stroke?.Extend(_cursorPhysical);
+            EndBrush();
+        }
+
+        _cursorPhysical = ToSkPhysical(new Point(cursorX / _dpiScaleX, cursorY / _dpiScaleY));
+        _brushCursorVisible = true;
+    }
+
     public HarnessSceneResult RenderBaselineDirect(string sceneName)
     {
         var oldX = _drawSurfacePxX;
@@ -268,9 +352,181 @@ public partial class OverlayWindow
         }
     }
 
-    public HarnessSceneResult RenderOptimizedProduction(string sceneName)
+    /// <summary>
+    /// Pre-fix t29 logic: padded only the selection bounding box, neglecting pointer departure.
+    /// Used as the negative control to prove regression test validity.
+    /// </summary>
+    public void UpdateDrawSurfaceBoundsUnfixed()
     {
-        UpdateDrawSurfaceBounds();
+        var sels = AllSelections().ToList();
+        if (sels.Count == 0 && _contentBounds.IsEmpty)
+        {
+            ApplyDrawSurfaceBounds(0, 0, 0, 0);
+            return;
+        }
+
+        int minX = int.MaxValue, minY = int.MaxValue;
+        int maxX = int.MinValue, maxY = int.MinValue;
+
+        foreach (var s in sels)
+        {
+            var px = BoundsToPixels(s.Bounds);
+            minX = Math.Min(minX, px.X);
+            minY = Math.Min(minY, px.Y);
+            maxX = Math.Max(maxX, px.X + px.Width);
+            maxY = Math.Max(maxY, px.Y + px.Height);
+        }
+
+        if (!_contentBounds.IsEmpty)
+        {
+            minX = Math.Min(minX, _contentBounds.Left);
+            minY = Math.Min(minY, _contentBounds.Top);
+            maxX = Math.Max(maxX, _contentBounds.Right);
+            maxY = Math.Max(maxY, _contentBounds.Bottom);
+        }
+
+        if (_brushCursorVisible && _tool == ToolMode.Draw)
+        {
+            var pad = (int)Math.Ceiling(_brush.Thickness / 2f + 4f);
+            minX -= pad;
+            minY -= pad;
+            maxX += pad;
+            maxY += pad;
+        }
+
+        minX = Math.Clamp(minX, 0, _frame.Width);
+        minY = Math.Clamp(minY, 0, _frame.Height);
+        maxX = Math.Clamp(maxX, minX, _frame.Width);
+        maxY = Math.Clamp(maxY, minY, _frame.Height);
+
+        ApplyDrawSurfaceBounds(minX, minY, maxX - minX, maxY - minY);
+    }
+
+    /// <summary>
+    /// Exact cursor-union bounds without grid snapping.
+    /// Proves that the 64-px snap produces 0 pixel diffs and measures the snap byte overhead.
+    /// </summary>
+    public void UpdateDrawSurfaceBoundsExact()
+    {
+        var sels = AllSelections().ToList();
+        if (sels.Count == 0 && _contentBounds.IsEmpty)
+        {
+            ApplyDrawSurfaceBounds(0, 0, 0, 0);
+            return;
+        }
+
+        int minX = int.MaxValue, minY = int.MaxValue;
+        int maxX = int.MinValue, maxY = int.MinValue;
+
+        foreach (var s in sels)
+        {
+            var px = BoundsToPixels(s.Bounds);
+            minX = Math.Min(minX, px.X);
+            minY = Math.Min(minY, px.Y);
+            maxX = Math.Max(maxX, px.X + px.Width);
+            maxY = Math.Max(maxY, px.Y + px.Height);
+        }
+
+        if (!_contentBounds.IsEmpty)
+        {
+            minX = Math.Min(minX, _contentBounds.Left);
+            minY = Math.Min(minY, _contentBounds.Top);
+            maxX = Math.Max(maxX, _contentBounds.Right);
+            maxY = Math.Max(maxY, _contentBounds.Bottom);
+        }
+
+        if (_brushCursorVisible && _tool == ToolMode.Draw)
+        {
+            var pad = (int)Math.Ceiling(_brush.Thickness / 2f + 4f);
+            minX = Math.Min(minX, (int)Math.Floor(_cursorPhysical.X) - pad);
+            minY = Math.Min(minY, (int)Math.Floor(_cursorPhysical.Y) - pad);
+            maxX = Math.Max(maxX, (int)Math.Ceiling(_cursorPhysical.X) + pad);
+            maxY = Math.Max(maxY, (int)Math.Ceiling(_cursorPhysical.Y) + pad);
+        }
+
+        minX = Math.Clamp(minX, 0, _frame.Width);
+        minY = Math.Clamp(minY, 0, _frame.Height);
+        maxX = Math.Clamp(maxX, minX, _frame.Width);
+        maxY = Math.Clamp(maxY, minY, _frame.Height);
+
+        ApplyDrawSurfaceBounds(minX, minY, maxX - minX, maxY - minY);
+    }
+
+    /// <summary>
+    /// Outward snap to an arbitrary grid size (e.g. 16, 32, 64, 128) to quantify grid constant trade-offs.
+    /// </summary>
+    public void UpdateDrawSurfaceBoundsGrid(int grid)
+    {
+        var sels = AllSelections().ToList();
+        if (sels.Count == 0 && _contentBounds.IsEmpty)
+        {
+            ApplyDrawSurfaceBounds(0, 0, 0, 0);
+            return;
+        }
+
+        int minX = int.MaxValue, minY = int.MaxValue;
+        int maxX = int.MinValue, maxY = int.MinValue;
+
+        foreach (var s in sels)
+        {
+            var px = BoundsToPixels(s.Bounds);
+            minX = Math.Min(minX, px.X);
+            minY = Math.Min(minY, px.Y);
+            maxX = Math.Max(maxX, px.X + px.Width);
+            maxY = Math.Max(maxY, px.Y + px.Height);
+        }
+
+        if (!_contentBounds.IsEmpty)
+        {
+            minX = Math.Min(minX, _contentBounds.Left);
+            minY = Math.Min(minY, _contentBounds.Top);
+            maxX = Math.Max(maxX, _contentBounds.Right);
+            maxY = Math.Max(maxY, _contentBounds.Bottom);
+        }
+
+        if (_brushCursorVisible && _tool == ToolMode.Draw)
+        {
+            var pad = (int)Math.Ceiling(_brush.Thickness / 2f + 4f);
+            minX = Math.Min(minX, (int)Math.Floor(_cursorPhysical.X) - pad);
+            minY = Math.Min(minY, (int)Math.Floor(_cursorPhysical.Y) - pad);
+            maxX = Math.Max(maxX, (int)Math.Ceiling(_cursorPhysical.X) + pad);
+            maxY = Math.Max(maxY, (int)Math.Ceiling(_cursorPhysical.Y) + pad);
+        }
+
+        if (grid > 1)
+        {
+            minX = minX / grid * grid;
+            minY = minY / grid * grid;
+            maxX = (maxX + grid - 1) / grid * grid;
+            maxY = (maxY + grid - 1) / grid * grid;
+        }
+
+        minX = Math.Clamp(minX, 0, _frame.Width);
+        minY = Math.Clamp(minY, 0, _frame.Height);
+        maxX = Math.Clamp(maxX, minX, _frame.Width);
+        maxY = Math.Clamp(maxY, minY, _frame.Height);
+
+        ApplyDrawSurfaceBounds(minX, minY, maxX - minX, maxY - minY);
+    }
+
+    public HarnessSceneResult RenderWithBoundsAction(string sceneName, Action boundsAction)
+    {
+        boundsAction();
+
+        if (_drawSurfacePxW <= 0 || _drawSurfacePxH <= 0)
+        {
+            var emptyPixels = new byte[_frame.Width * _frame.Height * 4];
+            return new HarnessSceneResult
+            {
+                SceneName = sceneName,
+                Sha256Hex = Convert.ToHexString(SHA256.HashData(emptyPixels)),
+                CanvasWidth = 0,
+                CanvasHeight = 0,
+                BufferBytesPerRepaint = 0,
+                ElapsedMs = 0,
+                FullFramePixelsBgra = emptyPixels,
+            };
+        }
 
         var sw = Stopwatch.StartNew();
         var sizedInfo = new SKImageInfo(_drawSurfacePxW, _drawSurfacePxH, SKColorType.Bgra8888, SKAlphaType.Premul);
@@ -278,7 +534,6 @@ public partial class OverlayWindow
         OnPaintSurface(this, new SKPaintSurfaceEventArgs(sizedSurface, sizedInfo));
         sw.Stop();
 
-        // Composite into full virtual desktop buffer (simulating WPF DrawingContext.DrawImage)
         var fullInfo = new SKImageInfo(_frame.Width, _frame.Height, SKColorType.Bgra8888, SKAlphaType.Premul);
         using var fullSurface = SKSurface.Create(fullInfo);
         fullSurface.Canvas.Clear(SKColors.Transparent);
@@ -303,6 +558,23 @@ public partial class OverlayWindow
             FullFramePixelsBgra = fullPixels,
         };
     }
+
+    public HarnessSceneResult RenderOptimizedProduction(string sceneName) =>
+        RenderWithBoundsAction(sceneName, UpdateDrawSurfaceBounds);
+
+    public HarnessSceneResult RenderUnfixed(string sceneName) =>
+        RenderWithBoundsAction(sceneName, UpdateDrawSurfaceBoundsUnfixed);
+
+    public HarnessSceneResult RenderExactNoSnap(string sceneName) =>
+        RenderWithBoundsAction(sceneName, UpdateDrawSurfaceBoundsExact);
+
+    public HarnessSceneResult RenderGridSnap(string sceneName, int grid) =>
+        RenderWithBoundsAction(sceneName, () => UpdateDrawSurfaceBoundsGrid(grid));
+
+    public bool GetShouldRenderDrawSurface() => ShouldRenderDrawSurface;
+    public Visibility GetDrawSurfaceVisibility() => DrawSurface.Visibility;
+    public (int X, int Y, int W, int H) GetDrawSurfacePixelBounds() =>
+        (_drawSurfacePxX, _drawSurfacePxY, _drawSurfacePxW, _drawSurfacePxH);
 }
 
 public static class OverlayPixelHarness
@@ -375,5 +647,78 @@ public static class OverlayPixelHarness
         var optimized = window2.RenderOptimizedProduction($"Single_{w}x{h}_Optimized");
 
         return (baseline, optimized);
+    }
+
+    public static OutsideCursorTestResult RunOutsideCursorComparison(
+        int selX, int selY, int selW, int selH,
+        int cursorX, int cursorY,
+        float thickness,
+        double dpiScale = 1.0,
+        string sceneName = "")
+    {
+        var name = string.IsNullOrEmpty(sceneName)
+            ? $"Sel_{selW}x{selH}_Cursor_{cursorX}_{cursorY}_Thick_{thickness}_Dpi_{dpiScale * 100:0}%"
+            : sceneName;
+
+        var f1 = CreateSyntheticFrame();
+        var w1 = new OverlayWindow(f1, new AppSettings());
+        w1.InitializeHeadlessForHarness(dpiScale, dpiScale);
+        w1.ExecuteCursorOutsideSelectionScript(selX, selY, selW, selH, cursorX, cursorY, thickness);
+        var baseline = w1.RenderBaselineDirect($"{name}_Baseline");
+
+        var f2 = CreateSyntheticFrame();
+        var w2 = new OverlayWindow(f2, new AppSettings());
+        w2.InitializeHeadlessForHarness(dpiScale, dpiScale);
+        w2.ExecuteCursorOutsideSelectionScript(selX, selY, selW, selH, cursorX, cursorY, thickness);
+        var production = w2.RenderOptimizedProduction($"{name}_Production");
+
+        var f3 = CreateSyntheticFrame();
+        var w3 = new OverlayWindow(f3, new AppSettings());
+        w3.InitializeHeadlessForHarness(dpiScale, dpiScale);
+        w3.ExecuteCursorOutsideSelectionScript(selX, selY, selW, selH, cursorX, cursorY, thickness);
+        var unfixed = w3.RenderUnfixed($"{name}_Unfixed");
+
+        var f4 = CreateSyntheticFrame();
+        var w4 = new OverlayWindow(f4, new AppSettings());
+        w4.InitializeHeadlessForHarness(dpiScale, dpiScale);
+        w4.ExecuteCursorOutsideSelectionScript(selX, selY, selW, selH, cursorX, cursorY, thickness);
+        var exact = w4.RenderExactNoSnap($"{name}_ExactNoSnap");
+
+        return new OutsideCursorTestResult
+        {
+            SceneName = name,
+            DpiScale = dpiScale,
+            BrushThickness = thickness,
+            CursorX = cursorX,
+            CursorY = cursorY,
+            Baseline = baseline,
+            Production = production,
+            Unfixed = unfixed,
+            ExactNoSnap = exact,
+        };
+    }
+
+    public static PristineCaptureAuditResult RunPristineCaptureAudit(double dpiScale = 1.0)
+    {
+        var frame = CreateSyntheticFrame();
+        var settings = new AppSettings();
+        var window = new OverlayWindow(frame, settings);
+        window.InitializeHeadlessForHarness(dpiScale, dpiScale);
+
+        bool shouldRender = window.GetShouldRenderDrawSurface();
+        var visibility = window.GetDrawSurfaceVisibility();
+        var (pxX, pxY, pxW, pxH) = window.GetDrawSurfacePixelBounds();
+        int bufferBytes = (visibility == Visibility.Visible) ? pxW * pxH * 4 : 0;
+
+        return new PristineCaptureAuditResult
+        {
+            DpiScale = dpiScale,
+            ShouldRenderDrawSurface = shouldRender,
+            DrawSurfaceVisibility = visibility,
+            DrawSurfacePixelWidth = pxW,
+            DrawSurfacePixelHeight = pxH,
+            BufferBytesPerRepaint = bufferBytes,
+            IsZeroCost = !shouldRender && visibility == Visibility.Collapsed && bufferBytes == 0,
+        };
     }
 }

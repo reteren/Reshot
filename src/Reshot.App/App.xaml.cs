@@ -39,6 +39,9 @@ public partial class App : System.Windows.Application
     private bool _audioRecording;
     private bool _shuttingDown;
 
+    /// <summary>Held so it can be detached from the static pool event on shutdown.</summary>
+    private Action? _poolWentIdle;
+
     /// <summary>Finalizes a take whose audio-track prompt is still open, if the app exits first.</summary>
     private Action? _pendingFinish;
     private Radial.RadialMenuWindow? _radial;
@@ -78,7 +81,16 @@ public partial class App : System.Windows.Application
         // The frame pool drops its retained buffer on a timer thread that knows nothing about
         // what the app is doing. Compacting is decided here instead, behind the same session
         // gate as every other post-capture cleanup, so it cannot land inside a recording.
-        CapturedFrame.PoolWentIdle += () => Dispatcher.BeginInvoke(new Action(SchedulePostCaptureCleanup));
+        // PoolWentIdle is static and outlives this instance, so the handler is held in a
+        // field and detached on the way out: left subscribed, a timer-thread eviction after
+        // shutdown posts to a dispatcher that has already gone down.
+        _poolWentIdle = () =>
+        {
+            if (_shuttingDown)
+                return;
+            Dispatcher.BeginInvoke(new Action(SchedulePostCaptureCleanup));
+        };
+        CapturedFrame.PoolWentIdle += _poolWentIdle;
 
         // 2. Single instance, a second launch signals the first and exits.
         _singleInstance = new SingleInstance();
@@ -159,6 +171,62 @@ public partial class App : System.Windows.Application
         }
 
         Log.Info("Startup: ready (idle in tray).");
+        ScheduleOverlayWarmup();
+    }
+
+    /// <summary>
+    /// Builds and throws away one overlay while the tray is idle, so the first real capture
+    /// does not pay for it.
+    ///
+    /// Constructing an <see cref="OverlayWindow"/> the first time in a process costs ~70 ms
+    /// more than every later one: BAML parsing of the window's markup, the type schema, WPF's
+    /// static caches and the JIT of the generated control-wiring path. Those are per-process
+    /// and survive the window being collected; the visual tree and its resource dictionaries
+    /// are per-instance and do not. So a throwaway instance pre-pays exactly the part that
+    /// lasts.
+    ///
+    /// The frame is 1x1. A real one is the whole virtual desktop — about 25 MB — and keeping
+    /// an overlay alive to hold it was measured at +77 MB of idle memory for no benefit.
+    /// Disposing this one leaves idle memory slightly lower than not warming at all.
+    ///
+    /// Runs at ApplicationIdle after the tray is up, so it cannot delay startup, and behind
+    /// the same session gate as the rest of the post-capture housekeeping so it cannot land
+    /// on top of a real capture.
+    /// </summary>
+    private void ScheduleOverlayWarmup()
+    {
+        if (_shuttingDown || Dispatcher.HasShutdownStarted || Dispatcher.HasShutdownFinished)
+            return;
+
+        Dispatcher.BeginInvoke(System.Windows.Threading.DispatcherPriority.ApplicationIdle, new Action(() =>
+        {
+            if (_shuttingDown || _overlay is not null || _recording || _audioRecording)
+                return;
+            if (_session.State != SessionState.Idle || _settingsService is null)
+                return;
+
+            try
+            {
+                using var frame = new CapturedFrame
+                {
+                    PixelsBgra = new byte[4],
+                    Width = 1,
+                    Height = 1,
+                    VirtualLeft = 0,
+                    VirtualTop = 0,
+                    Monitors = new[] { new CapturedMonitor(0, 0, 1, 1, true) },
+                };
+
+                var warm = new OverlayWindow(frame, _settingsService.Current);
+                warm.Close();
+                Log.Info("Startup: overlay warm-up done.");
+            }
+            catch (Exception ex)
+            {
+                // A failed warm-up costs the first capture its head start and nothing else.
+                Log.Warn($"Startup: overlay warm-up skipped ({ex.GetType().Name}).");
+            }
+        }));
     }
 
     /// <summary>
@@ -219,10 +287,15 @@ public partial class App : System.Windows.Application
         // its hardware plane, which is one visible blink on every press, and a hold (which
         // never needs a frame at all) paid it too, along with the GPU cost of capturing a
         // running game just to throw the result away.
+        // The interval is pure added latency after the finger leaves the key, on the one
+        // interaction this app is judged by, so it is as short as it is worth making: the
+        // dispatcher cannot beat the ~15.6 ms Win32 timer quantum, and 8 ms buys ~2.3 ms
+        // at p95 for nothing. It costs nothing at rest either — this timer exists only
+        // while the key is physically down, and is destroyed on release.
         _holdTimer?.Stop();
         _holdTimer = new System.Windows.Threading.DispatcherTimer
         {
-            Interval = TimeSpan.FromMilliseconds(15),
+            Interval = TimeSpan.FromMilliseconds(8),
         };
         _holdTimer.Tick += (_, _) =>
         {
@@ -1088,10 +1161,17 @@ public partial class App : System.Windows.Application
     /// </summary>
     private void SchedulePostCaptureCleanup()
     {
+        // FinishRecording calls this from a finally that OnExit can reach, so the guard has
+        // to be here rather than only at the call sites: queueing onto a dispatcher that is
+        // already shutting down throws, and that exception would escape into the middle of
+        // shutdown and abandon the rest of it.
+        if (_shuttingDown || Dispatcher.HasShutdownStarted || Dispatcher.HasShutdownFinished)
+            return;
+
         var generation = _cleanupGeneration;
         Dispatcher.BeginInvoke(System.Windows.Threading.DispatcherPriority.ApplicationIdle, new Action(() =>
         {
-            if (generation != _cleanupGeneration)
+            if (generation != _cleanupGeneration || _shuttingDown)
                 return;
 
             if (_session.State != SessionState.Idle)
@@ -1101,7 +1181,14 @@ public partial class App : System.Windows.Application
                 return;
 
             System.Runtime.GCSettings.LargeObjectHeapCompactionMode = System.Runtime.GCLargeObjectHeapCompactionMode.CompactOnce;
-            GC.Collect(2, GCCollectionMode.Forced, blocking: false, compacting: true);
+
+            // Blocking, despite running at idle. A non-blocking compacting collection returns
+            // while it is still working, so a hotkey pressed a moment later runs the capture
+            // straight into it — the stutter this gate exists to prevent. The generation token
+            // can reject a callback that has not started; it cannot call off a collection that
+            // has. Here, at ApplicationIdle with the session confirmed idle, there is nothing
+            // queued behind us to block.
+            GC.Collect(2, GCCollectionMode.Forced, blocking: true, compacting: true);
         }));
     }
 
@@ -1109,6 +1196,11 @@ public partial class App : System.Windows.Application
     {
         Log.Info("Shutdown: cleaning up.");
         _shuttingDown = true;
+        if (_poolWentIdle is not null)
+        {
+            CapturedFrame.PoolWentIdle -= _poolWentIdle;
+            _poolWentIdle = null;
+        }
         if (_recording)
             StopRecording();
         var pending = _pendingFinish;

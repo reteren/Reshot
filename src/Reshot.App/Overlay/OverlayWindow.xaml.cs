@@ -88,7 +88,26 @@ public partial class OverlayWindow : Window
     };
     private BrushSettings _brush => _toolSettings[ToolKeyFor(_drawSub)];
     private BrushStroke? _stroke;
+    private SKPaint? _strokePaint;
     private SKPath? _strokeClip;
+    private SKRect? _activeDrawingClipRect;
+    private readonly Action _renderDrawSurfaceAction;
+
+    // Reusable cursor paints (allocated once to avoid per-paint interop churn during mouse drag)
+    private static readonly SKPaint s_cursorOuterPaint = new()
+    {
+        Style = SKPaintStyle.Stroke,
+        StrokeWidth = 2f,
+        Color = new SKColor(0, 0, 0, 160),
+        IsAntialias = true,
+    };
+    private static readonly SKPaint s_cursorInnerPaint = new()
+    {
+        Style = SKPaintStyle.Stroke,
+        StrokeWidth = 1f,
+        Color = new SKColor(255, 255, 255, 230),
+        IsAntialias = true,
+    };
     private VectorObject? _vectorPreview;   // shape being dragged
     private SKPoint _shapeStart;
     private VectorObject? _textEditing;      // text being typed
@@ -253,6 +272,18 @@ public partial class OverlayWindow : Window
         FontCatalog.Warmup();
 
         InitializeComponent();
+
+        _renderDrawSurfaceAction = () =>
+        {
+            _drawRefreshQueued = false;
+            if (_isClosed)
+                return;
+
+            UpdateDrawSurfaceVisibility();
+            if (DrawSurface.Visibility == Visibility.Visible &&
+                !Dispatcher.HasShutdownStarted && !Dispatcher.HasShutdownFinished)
+                DrawSurface.InvalidateVisual();
+        };
 
         SourceInitialized += OnSourceInitialized;
         Loaded += OnLoaded;
@@ -784,6 +815,7 @@ public partial class OverlayWindow : Window
     {
         ExitOcrMode(); // picking any drawing/selection tool leaves OCR text mode
         CommitText();
+        FinishActiveGesture(); // a shortcut can change the tool with the button still down
         _tool = tool;
         Cursor = Cursors.Cross;
         if (tool == ToolMode.Select)
@@ -1440,6 +1472,39 @@ public partial class OverlayWindow : Window
 
     private SKPoint ToSkPhysical(Point p) => new((float)(p.X * _dpiScaleX), (float)(p.Y * _dpiScaleY));
 
+    /// <summary>
+    /// Computes the union bounding rectangle of all active selections in physical pixels.
+    /// Used to clip active in-progress drawings without allocating LINQ pipelines on every paint frame.
+    /// </summary>
+    private SKRect? ComputeSelectionUnionRect()
+    {
+        int minX = int.MaxValue, minY = int.MaxValue;
+        int maxX = int.MinValue, maxY = int.MinValue;
+        bool any = false;
+
+        if (_selection is not null)
+        {
+            var px = BoundsToPixels(_selection.Bounds);
+            minX = Math.Min(minX, px.X);
+            minY = Math.Min(minY, px.Y);
+            maxX = Math.Max(maxX, px.X + px.Width);
+            maxY = Math.Max(maxY, px.Y + px.Height);
+            any = true;
+        }
+
+        for (var i = 0; i < _committed.Count; i++)
+        {
+            var px = BoundsToPixels(_committed[i].Bounds);
+            minX = Math.Min(minX, px.X);
+            minY = Math.Min(minY, px.Y);
+            maxX = Math.Max(maxX, px.X + px.Width);
+            maxY = Math.Max(maxY, px.Y + px.Height);
+            any = true;
+        }
+
+        return any ? SKRect.Create(minX, minY, maxX - minX, maxY - minY) : null;
+    }
+
     private void BeginBrush(Point p)
     {
         // Drawing only works inside a selection (SPEC §3).
@@ -1448,7 +1513,10 @@ public partial class OverlayWindow : Window
 
         _strokeClip?.Dispose();
         _strokeClip = BuildSelectionClip();
+        _activeDrawingClipRect = ComputeSelectionUnionRect();
         _stroke = new BrushStroke(_brush);
+        _strokePaint?.Dispose();
+        _strokePaint = _stroke.CreatePaint();
         _stroke.Begin(ToSkPhysical(p));
         CaptureMouse();
         RefreshDrawSurface();
@@ -1456,25 +1524,61 @@ public partial class OverlayWindow : Window
 
     private void EndBrush()
     {
-        if (_stroke is { IsEmpty: false } && _document is not null)
+        // The commit can throw — snapshotting a region and pushing history both allocate.
+        // Everything below the try is gesture state that must not outlive the gesture
+        // whatever happens: a retained paint, clip or mouse capture turns one failed
+        // stroke into an overlay that draws through the wrong clip and never lets go of
+        // the mouse.
+        try
         {
-            var region = StrokeRegion(_stroke.Path);
-            if (region is { Width: > 0, Height: > 0 })
+            if (_stroke is { IsEmpty: false } && _document is not null)
             {
-                var before = CaptureDocument.SnapshotRegion(_document.PaintLayer, region);
-                using (var paint = _stroke.CreatePaint())
-                    _document.CommitStroke(_stroke.Path, paint, _strokeClip);
-                var after = CaptureDocument.SnapshotRegion(_document.PaintLayer, region);
-                _history.Push(new LayerRegionCommand(_document.PaintLayer, region, before, after));
-                _contentBounds = _contentBounds.IsEmpty ? region : SKRectI.Union(_contentBounds, region);
+                var region = StrokeRegion(_stroke.Path);
+                if (region is { Width: > 0, Height: > 0 })
+                {
+                    var before = CaptureDocument.SnapshotRegion(_document.PaintLayer, region);
+                    var paint = _strokePaint ?? _stroke.CreatePaint();
+                    try
+                    {
+                        _document.CommitStroke(_stroke.Path, paint, _strokeClip);
+                    }
+                    finally
+                    {
+                        if (paint != _strokePaint)
+                            paint.Dispose();
+                    }
+                    var after = CaptureDocument.SnapshotRegion(_document.PaintLayer, region);
+                    _history.Push(new LayerRegionCommand(_document.PaintLayer, region, before, after));
+                    _contentBounds = _contentBounds.IsEmpty ? region : SKRectI.Union(_contentBounds, region);
+                }
             }
         }
+        finally
+        {
+            _stroke = null;
+            _strokePaint?.Dispose();
+            _strokePaint = null;
+            _activeDrawingClipRect = null;
+            _strokeClip?.Dispose();
+            _strokeClip = null;
+            ReleaseMouseCapture();
+            RefreshDrawSurface();
+        }
+    }
 
-        _stroke = null;
-        _strokeClip?.Dispose();
-        _strokeClip = null;
-        ReleaseMouseCapture();
-        RefreshDrawSurface();
+    /// <summary>
+    /// Finishes whatever gesture is in progress. A stroke owns a paint, a clip and the
+    /// mouse capture, and it reads a selection that it captured when it began — so
+    /// anything that changes the tool or the selection underneath it has to end it first.
+    /// Left running, the next gesture overwrites its state and the stroke is silently
+    /// lost, or it commits against a clip belonging to a selection that no longer exists.
+    /// </summary>
+    private void FinishActiveGesture()
+    {
+        if (_stroke is not null)
+            EndBrush();
+        if (_effectStroke is not null)
+            EndEffect();
     }
 
     /// <summary>The stroke's affected region (bounds + brush radius), clamped to the layer.</summary>
@@ -1684,10 +1788,32 @@ public partial class OverlayWindow : Window
         (_tool == ToolMode.Draw && _brushCursorVisible && !_eyedropping && !_eyedropperArmed) ||
         _ocr?.HasWords == true;
 
+    /// <summary>
+    /// The box the brush ring occupies, or null when no ring is drawn. The ring follows the
+    /// pointer, which is free to leave the selection — and to be the only thing on screen,
+    /// before any selection exists at all.
+    /// </summary>
+    private SKRectI? BrushRingBounds()
+    {
+        if (!_brushCursorVisible || _tool != ToolMode.Draw)
+            return null;
+
+        var pad = (int)Math.Ceiling(_brush.Thickness / 2f + 4f);
+        return new SKRectI(
+            (int)Math.Floor(_cursorPhysical.X) - pad,
+            (int)Math.Floor(_cursorPhysical.Y) - pad,
+            (int)Math.Ceiling(_cursorPhysical.X) + pad,
+            (int)Math.Ceiling(_cursorPhysical.Y) + pad);
+    }
+
     private void UpdateDrawSurfaceBounds()
     {
-        var sels = AllSelections().ToList();
-        if (sels.Count == 0 && _contentBounds.IsEmpty)
+        var ring = BrushRingBounds();
+        var hasSelections = _selection is not null || _committed.Count > 0;
+
+        // The ring alone is reason enough for a surface: ShouldRenderDrawSurface draws it
+        // with no selection and no content, and collapsing to zero here would hide it.
+        if (!hasSelections && _contentBounds.IsEmpty && ring is null)
         {
             if (_ocrMode && _ocr is not null)
             {
@@ -1706,9 +1832,18 @@ public partial class OverlayWindow : Window
         int minX = int.MaxValue, minY = int.MaxValue;
         int maxX = int.MinValue, maxY = int.MinValue;
 
-        foreach (var s in sels)
+        if (_selection is not null)
         {
-            var px = BoundsToPixels(s.Bounds);
+            var px = BoundsToPixels(_selection.Bounds);
+            minX = Math.Min(minX, px.X);
+            minY = Math.Min(minY, px.Y);
+            maxX = Math.Max(maxX, px.X + px.Width);
+            maxY = Math.Max(maxY, px.Y + px.Height);
+        }
+
+        for (var i = 0; i < _committed.Count; i++)
+        {
+            var px = BoundsToPixels(_committed[i].Bounds);
             minX = Math.Min(minX, px.X);
             minY = Math.Min(minY, px.Y);
             maxX = Math.Max(maxX, px.X + px.Width);
@@ -1723,16 +1858,14 @@ public partial class OverlayWindow : Window
             maxY = Math.Max(maxY, _contentBounds.Bottom);
         }
 
-        // The brush ring follows the pointer, which is free to leave the selection
-        // entirely. Padding the selection covers a ring hugging its edge and nothing
-        // further out, so the ring's own box joins the union instead.
-        if (_brushCursorVisible && _tool == ToolMode.Draw)
+        // Padding the selection would cover a ring hugging its edge and nothing further
+        // out, so the ring's own box joins the union instead.
+        if (ring is { } ringBox)
         {
-            var pad = (int)Math.Ceiling(_brush.Thickness / 2f + 4f);
-            minX = Math.Min(minX, (int)Math.Floor(_cursorPhysical.X) - pad);
-            minY = Math.Min(minY, (int)Math.Floor(_cursorPhysical.Y) - pad);
-            maxX = Math.Max(maxX, (int)Math.Ceiling(_cursorPhysical.X) + pad);
-            maxY = Math.Max(maxY, (int)Math.Ceiling(_cursorPhysical.Y) + pad);
+            minX = Math.Min(minX, ringBox.Left);
+            minY = Math.Min(minY, ringBox.Top);
+            maxX = Math.Max(maxX, ringBox.Right);
+            maxY = Math.Max(maxY, ringBox.Bottom);
         }
 
         // Snapped outwards to a coarse grid so that dragging the pointer or a selection
@@ -1793,17 +1926,7 @@ public partial class OverlayWindow : Window
             return;
 
         _drawRefreshQueued = true;
-        Dispatcher.BeginInvoke(DispatcherPriority.Render, new Action(() =>
-        {
-            _drawRefreshQueued = false;
-            if (_isClosed)
-                return;
-
-            UpdateDrawSurfaceVisibility();
-            if (DrawSurface.Visibility == Visibility.Visible &&
-                !Dispatcher.HasShutdownStarted && !Dispatcher.HasShutdownFinished)
-                DrawSurface.InvalidateVisual();
-        }));
+        Dispatcher.BeginInvoke(DispatcherPriority.Render, _renderDrawSurfaceAction);
     }
 
     private void OnPaintSurface(object? sender, SKPaintSurfaceEventArgs e)
@@ -1834,12 +1957,9 @@ public partial class OverlayWindow : Window
         // blits below otherwise cost the whole 4K surface every frame.
         if (_effectStroke is not null || _stroke is not null || _vectorPreview is not null)
         {
-            var sel = AllSelections().Select(s => BoundsToPixels(s.Bounds)).ToList();
-            if (sel.Count > 0)
-            {
-                var u = UnionRects(sel);
-                canvas.ClipRect(SKRect.Create(u.X, u.Y, u.Width, u.Height));
-            }
+            var clipRect = _activeDrawingClipRect ?? ComputeSelectionUnionRect();
+            if (clipRect is { } cr)
+                canvas.ClipRect(cr);
         }
 
         // Layers, bottom→top: effects → paint → vectors (matches export order).
@@ -1908,8 +2028,16 @@ public partial class OverlayWindow : Window
             canvas.Save();
             if (_strokeClip is not null)
                 canvas.ClipPath(_strokeClip, antialias: true);
-            using var paint = _stroke.CreatePaint();
-            canvas.DrawPath(_stroke.Path, paint);
+            var paint = _strokePaint ?? _stroke.CreatePaint();
+            try
+            {
+                canvas.DrawPath(_stroke.Path, paint);
+            }
+            finally
+            {
+                if (paint != _strokePaint)
+                    paint.Dispose();
+            }
             canvas.Restore();
         }
 
@@ -1976,18 +2104,8 @@ public partial class OverlayWindow : Window
     private void DrawBrushCursor(SKCanvas canvas)
     {
         var r = Math.Max(2f, _brush.Thickness / 2f);
-        using var outer = new SKPaint
-        {
-            Style = SKPaintStyle.Stroke, StrokeWidth = 2f,
-            Color = new SKColor(0, 0, 0, 160), IsAntialias = true,
-        };
-        using var inner = new SKPaint
-        {
-            Style = SKPaintStyle.Stroke, StrokeWidth = 1f,
-            Color = new SKColor(255, 255, 255, 230), IsAntialias = true,
-        };
-        canvas.DrawCircle(_cursorPhysical, r, outer);
-        canvas.DrawCircle(_cursorPhysical, r, inner);
+        canvas.DrawCircle(_cursorPhysical, r, s_cursorOuterPaint);
+        canvas.DrawCircle(_cursorPhysical, r, s_cursorInnerPaint);
     }
 
     // ---- Brush settings panel (Shift) ------------------------------------------
@@ -3108,6 +3226,9 @@ public partial class OverlayWindow : Window
     /// <summary>Ctrl+A selects the primary monitor; pressing it again expands to all.</summary>
     private void ApplyCtrlA()
     {
+        // Replacing the selection under a live stroke would leave it clipped to a
+        // rectangle that no longer exists, so the stroke lands first.
+        FinishActiveGesture();
         _ctrlAMode = _ctrlAMode == CtrlAMode.Primary ? CtrlAMode.All : CtrlAMode.Primary;
         var bounds = _ctrlAMode == CtrlAMode.All ? AllMonitorsRect() : PrimaryMonitorRect();
         _committed.Clear();
@@ -3539,21 +3660,34 @@ public partial class OverlayWindow : Window
 
     private enum ExportKind { Copy, Save, SaveAs }
 
-    private void ExportAndClose(ExportKind kind)
+    private async void ExportAndClose(ExportKind kind)
     {
         CommitText(); // bake any unfinished text into the document first
         Log.Info($"Export requested: {kind}; shape={_selection?.Kind}; bounds={_selection?.Bounds}.");
+        if (kind == ExportKind.Copy)
+        {
+            Hide();
+        }
         if (!TryGetExportImage(out var image))
         {
+            if (kind == ExportKind.Copy)
+                Show();
             Log.Warn("Export: no valid selection to export.");
             return;
         }
-
         switch (kind)
         {
             case ExportKind.Copy:
-                _exporter.CopyToClipboard(image);
-                EndSession(produced: true);
+                var copied = await _exporter.CopyToClipboardAsync(image);
+                if (copied)
+                    EndSession(produced: true);
+                else
+                {
+                    // Keep the editor available when all clipboard retries fail; the warning
+                    // and visible overlay make the failure actionable instead of silent.
+                    Show();
+                    Log.Warn("Export: copy failed after three attempts; selection remains open.");
+                }
                 break;
 
             case ExportKind.Save:
@@ -3846,6 +3980,8 @@ public partial class OverlayWindow : Window
         _history.Dispose();
         _document?.Dispose();
         _document = null;
+        _strokePaint?.Dispose();
+        _strokePaint = null;
         _strokeClip?.Dispose();
         _strokeClip = null;
         _effectStroke?.Dispose();
