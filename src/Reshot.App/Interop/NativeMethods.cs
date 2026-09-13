@@ -466,4 +466,32 @@ internal static class NativeMethods
 
     public const uint SWP_NOMOVE = 0x0002;
     public const uint SWP_NOSIZE = 0x0001;
+
+    /// <summary>The window holding the clipboard open, or zero when nothing does.</summary>
+    [DllImport("user32.dll")]
+    private static extern IntPtr GetOpenClipboardWindow();
+
+    /// <summary>
+    /// Names the process holding the clipboard, or null when nothing is. Only meaningful
+    /// at the instant a clipboard call fails — a holder that took it for one copy is
+    /// usually gone a moment later, and the user needs the name of the app that actually
+    /// blocked them, not whoever happens to hold it when the message is drawn.
+    /// </summary>
+    public static string? DescribeClipboardHolder()
+    {
+        var hwnd = GetOpenClipboardWindow();
+        if (hwnd == IntPtr.Zero)
+            return null;
+
+        GetWindowThreadProcessId(hwnd, out var pid);
+        try
+        {
+            using var process = System.Diagnostics.Process.GetProcessById((int)pid);
+            return process.ProcessName;
+        }
+        catch
+        {
+            return $"pid {pid}";
+        }
+    }
 }

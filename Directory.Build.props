@@ -1,4 +1,4 @@
-<Project>
+﻿<Project>
 
   <!-- Shared settings for every project in the Reshot solution. -->
   <PropertyGroup>
@@ -8,9 +8,9 @@
     <Platforms>x64</Platforms>
     <PlatformTarget>x64</PlatformTarget>
     <TreatWarningsAsErrors>false</TreatWarningsAsErrors>
-    <Version>1.1.4</Version>
-    <AssemblyVersion>1.1.4.0</AssemblyVersion>
-    <FileVersion>1.1.4.0</FileVersion>
+    <Version>1.1.6</Version>
+    <AssemblyVersion>1.1.6.0</AssemblyVersion>
+    <FileVersion>1.1.6.0</FileVersion>
     <Company>Reshot</Company>
     <Product>Reshot</Product>
     <Authors>reteren</Authors>

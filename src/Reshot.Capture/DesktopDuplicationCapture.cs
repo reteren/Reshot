@@ -11,10 +11,10 @@ namespace Reshot.Capture;
 /// <summary>
 /// Snapshot path built on the DXGI Desktop Duplication API.
 ///
-/// It exists for one reason: the frame it hands back has never had a cursor in it. WGC can
-/// produce the same frame only by asking the compositor to leave the cursor out, and that
-/// request forces the cursor off its hardware plane for the duration — one visible blink on
-/// every screenshot. Duplication has no such switch, so there is nothing to blink.
+/// Desktop Duplication normally leaves the cursor on its hardware plane, but a compositor
+/// or overlay can bake it into the duplicated pixels. The pointer metadata is authoritative
+/// only for acquires that carry a non-zero LastMouseUpdateTime; an unknown state is handed to
+/// WGC, whose cursor exclusion switch guarantees a cursor-free still at the cost of a blink.
 ///
 /// It is not a replacement for WGC. Duplication is bound to the adapter that drives the
 /// display, gives up in front of an exclusive-fullscreen game, and refuses rotated or
@@ -67,6 +67,7 @@ internal static class DesktopDuplicationCapture
         using var bufferLease = CapturedFrame.RentBuffer(checked(vWidth * vHeight * 4));
         var buffer = bufferLease.Buffer;
         var captured = new bool[monitors.Count];
+        var cursorPositionKnown = CaptureNative.GetCursorPos(out var cursorPosition);
 
         D3D11CreateDevice(
             null,
@@ -100,7 +101,8 @@ internal static class DesktopDuplicationCapture
                         continue;
 
                     DuplicateOutputInto(
-                        device, context, output, monitors[index], buffer, vLeft, vTop, vWidth);
+                        device, context, output, monitors[index], buffer, vLeft, vTop, vWidth,
+                        cursorPositionKnown, cursorPosition);
                     captured[index] = true;
                 }
             }
@@ -147,7 +149,9 @@ internal static class DesktopDuplicationCapture
         IDXGIOutput output,
         CaptureNative.MonitorHandle monitor,
         byte[] buffer,
-        int vLeft, int vTop, int vWidth)
+        int vLeft, int vTop, int vWidth,
+        bool cursorPositionKnown,
+        CaptureNative.POINT cursorPosition)
     {
         using var output1 = output.QueryInterface<IDXGIOutput1>();
 
@@ -157,6 +161,12 @@ internal static class DesktopDuplicationCapture
 
         var deadline = Environment.TickCount64 + ContentDeadlineMs;
         var attempts = 0;
+        bool? cursorComposited = null;
+        var cursorIsOnMonitor = cursorPositionKnown &&
+            cursorPosition.X >= monitor.Bounds.Left &&
+            cursorPosition.X < monitor.Bounds.Right &&
+            cursorPosition.Y >= monitor.Bounds.Top &&
+            cursorPosition.Y < monitor.Bounds.Bottom;
 
         while (true)
         {
@@ -176,6 +186,14 @@ internal static class DesktopDuplicationCapture
 
             try
             {
+                // DXGI only refreshes PointerPosition when the cursor changes. A zero timestamp
+                // therefore cannot prove that this frame is cursor-free (especially on the first
+                // idle acquire), so retain the last meaningful update and fall back when there
+                // has not been one yet. Visible=false means that the cursor was composited into
+                // the desktop image; Visible=true means it is a separate pointer plane.
+                if (cursorIsOnMonitor && info.LastMouseUpdateTime != 0)
+                    cursorComposited = !info.PointerPosition.Visible;
+
                 // AccumulatedFrames == 0 means nothing was presented into this surface: the
                 // handshake frame, or a pointer-only update. Its contents are not the
                 // desktop, and reading it is exactly how the screenshot comes out black.
@@ -187,6 +205,17 @@ internal static class DesktopDuplicationCapture
                         $"Desktop Duplication only ever returned empty frames for the monitor " +
                         $"at ({monitor.Bounds.Left},{monitor.Bounds.Top}).");
 
+                if (cursorIsOnMonitor && cursorComposited is not false)
+                    throw cursorComposited is true
+                        ? new DesktopDuplicationCursorStateException(
+                            $"Desktop Duplication reported a composited cursor at " +
+                            $"({monitor.Bounds.Left},{monitor.Bounds.Top}).",
+                            composited: true)
+                        : new DesktopDuplicationCursorStateException(
+                            $"Desktop Duplication did not report cursor state for " +
+                            $"({monitor.Bounds.Left},{monitor.Bounds.Top}); using WGC.",
+                            composited: false);
+
                 if (resource is null)
                     throw new InvalidOperationException("Desktop Duplication returned a null surface.");
 
@@ -194,9 +223,8 @@ internal static class DesktopDuplicationCapture
                 CopyIntoBuffer(device, context, sourceTex, monitor, buffer, vLeft, vTop, vWidth);
                 // The acquire count is the useful half: it says how many empty frames had
                 // to be skipped, so a display that starts needing many of them shows up
-                // here before it shows up as a timeout. PointerPosition is deliberately
-                // not logged — it is only refreshed when the mouse moves, so on an idle
-                // cursor it reports stale values that read as meaningful and are not.
+                // here before it shows up as a timeout. The pointer state check above is
+                // deliberately conservative because idle acquires have no fresh metadata.
                 Log.Info($"Duplication: monitor ({monitor.Bounds.Left},{monitor.Bounds.Top}) " +
                          $"took {attempts} acquire(s), {info.AccumulatedFrames} accumulated frame(s).");
                 return;
@@ -271,4 +299,18 @@ internal static class DesktopDuplicationCapture
             context.Unmap(staging, 0);
         }
     }
+}
+
+/// <summary>
+/// Signals that Desktop Duplication cannot prove this still excludes a cursor. The caller
+/// should use WGC for the current capture; this is not a structural duplication failure.
+/// </summary>
+internal sealed class DesktopDuplicationCursorStateException : Exception
+{
+    internal DesktopDuplicationCursorStateException(string message, bool composited) : base(message)
+    {
+        IsComposited = composited;
+    }
+
+    internal bool IsComposited { get; }
 }

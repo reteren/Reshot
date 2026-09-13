@@ -15,6 +15,10 @@ internal static class CaptureNative
     public static extern int GetSystemMetrics(int nIndex);
 
     [DllImport("user32.dll")]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    public static extern bool GetCursorPos(out POINT point);
+
+    [DllImport("user32.dll")]
     public static extern IntPtr GetForegroundWindow();
 
     [DllImport("user32.dll")]
@@ -30,6 +34,12 @@ internal static class CaptureNative
         public int Left, Top, Right, Bottom;
         public int Width => Right - Left;
         public int Height => Bottom - Top;
+    }
+
+    [StructLayout(LayoutKind.Sequential)]
+    public struct POINT
+    {
+        public int X, Y;
     }
 
     [StructLayout(LayoutKind.Sequential)]

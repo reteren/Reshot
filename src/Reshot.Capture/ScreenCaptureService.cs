@@ -8,10 +8,11 @@ namespace Reshot.Capture;
 /// machine allows it and through Windows.Graphics.Capture when it does not; recording is
 /// always WGC.
 ///
-/// The split is not about speed. A WGC snapshot has to ask the compositor to leave the
-/// cursor out of the frame, and that request pushes the cursor off its hardware plane for
-/// as long as the session lives — a visible blink on every screenshot. A duplicated desktop
-/// simply never contains the cursor, so the same frame costs nothing to look at. WGC keeps
+/// The split is not about speed. A WGC snapshot asks the compositor to leave the cursor out
+/// of the frame, and that request can push the cursor off its hardware plane for as long as
+/// the session lives — a visible blink on a screenshot. Desktop Duplication usually leaves
+/// the cursor separate, but its pointer metadata can report a cursor composited into the
+/// pixels (or be unknown on an idle acquire); those stills use WGC as well. WGC also keeps
 /// the cases duplication cannot serve: a display driven by another adapter, an
 /// exclusive-fullscreen game, a rotated or HDR output.
 /// </summary>
@@ -38,6 +39,15 @@ public sealed class ScreenCaptureService : IScreenCaptureService
             try
             {
                 return DesktopDuplicationCapture.SnapshotAllMonitors(monitors);
+            }
+            catch (DesktopDuplicationCursorStateException ex)
+            {
+                // Desktop Duplication cannot remove a cursor that the compositor baked into
+                // its surface (or prove that an idle acquire is cursor-free). WGC can request
+                // cursor exclusion for this still, so use it only for the affected capture.
+                var reason = ex.IsComposited ? "composited" : "unknown";
+                Log.Warn($"Desktop Duplication → WGC fallback reason={reason}: {ex.Message}");
+                return _wgc.SnapshotAllMonitors(monitors);
             }
             catch (NotSupportedException ex)
             {

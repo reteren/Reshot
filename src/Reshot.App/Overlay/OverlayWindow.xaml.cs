@@ -1,4 +1,4 @@
-using System.ComponentModel;
+﻿using System.ComponentModel;
 using System.Runtime.InteropServices;
 using System.Windows;
 using System.Windows.Controls;
@@ -118,6 +118,14 @@ public partial class OverlayWindow : Window
     private EventHandler? _hoverTick;
     private DispatcherTimer? _flyoutCloseTimer;
     private EventHandler? _flyoutCloseTick;
+    private DispatcherTimer? _exportNoticeTimer;
+
+    /// <summary>
+    /// True while a copy is in flight. The window hides itself for that second so the editor
+    /// appears to close instantly, which makes an invisible overlay a legitimate state rather
+    /// than evidence of a stuck one — the host checks this before deciding it is stuck.
+    /// </summary>
+    public bool IsExporting { get; private set; }
     private bool _openedByHover;
     private bool _panelAnimating;
     private readonly Dictionary<Border, Button> _flyoutOwner = new();
@@ -272,6 +280,10 @@ public partial class OverlayWindow : Window
         FontCatalog.Warmup();
 
         InitializeComponent();
+
+        // Set here rather than in the markup: the outlined crosshair is built in code, and
+        // the window must already be wearing it before the first tool is chosen.
+        Cursor = CrosshairCursor.Instance;
 
         _renderDrawSurfaceAction = () =>
         {
@@ -817,7 +829,7 @@ public partial class OverlayWindow : Window
         CommitText();
         FinishActiveGesture(); // a shortcut can change the tool with the button still down
         _tool = tool;
-        Cursor = Cursors.Cross;
+        Cursor = CrosshairCursor.Instance;
         if (tool == ToolMode.Select)
         {
             _brushCursorVisible = false;
@@ -893,7 +905,7 @@ public partial class OverlayWindow : Window
         SetTool(ToolMode.Draw);
         HighlightTool();
         LoadToolSettingsIntoPanel();
-        Cursor = sub == DrawSubTool.Text ? Cursors.IBeam : Cursors.Cross;
+        Cursor = sub == DrawSubTool.Text ? Cursors.IBeam : CrosshairCursor.Instance;
         Log.Info($"Draw sub-tool → {sub}.");
     }
 
@@ -1732,7 +1744,7 @@ public partial class OverlayWindow : Window
         HideOcrHint();
         if (IsMouseCaptured)
             ReleaseMouseCapture();
-        Cursor = Cursors.Cross;
+        Cursor = CrosshairCursor.Instance;
         HighlightTool();
         RefreshDrawSurface();
     }
@@ -1776,6 +1788,33 @@ public partial class OverlayWindow : Window
     }
 
     private void HideOcrHint() => OcrHint.Visibility = Visibility.Collapsed;
+
+    /// <summary>
+    /// Shows why an export failed, and clears itself once the user acts. Kept separate from
+    /// the OCR hint: that one describes a mode the user chose, this one reports something
+    /// going wrong, and they can both be on screen at once.
+    /// </summary>
+    private void ShowExportNotice(string text)
+    {
+        ExportNoticeText.Text = text;
+        ExportNotice.Visibility = Visibility.Visible;
+
+        _exportNoticeTimer?.Stop();
+        _exportNoticeTimer = new System.Windows.Threading.DispatcherTimer
+        {
+            Interval = TimeSpan.FromSeconds(6),
+        };
+        _exportNoticeTimer.Tick += (_, _) => HideExportNotice();
+        _exportNoticeTimer.Start();
+    }
+
+    private void HideExportNotice()
+    {
+        _exportNoticeTimer?.Stop();
+        _exportNoticeTimer = null;
+        if (!_isClosed)
+            ExportNotice.Visibility = Visibility.Collapsed;
+    }
 
     private bool ShouldRenderDrawSurface =>
         _document?.HasPaint == true ||
@@ -2725,7 +2764,7 @@ public partial class OverlayWindow : Window
     {
         _eyedropperArmed = armed;
         EyedropperButton.Tag = armed ? "on" : null;
-        Cursor = armed ? Cursors.Cross : (_drawSub == DrawSubTool.Text ? Cursors.IBeam : Cursors.Cross);
+        Cursor = armed ? CrosshairCursor.Instance : (_drawSub == DrawSubTool.Text ? Cursors.IBeam : CrosshairCursor.Instance);
 
         if (!armed)
             EyedropperPreview.Visibility = Visibility.Collapsed;
@@ -3178,6 +3217,15 @@ public partial class OverlayWindow : Window
                 }
                 break;
 
+            case Key.S when Keyboard.Modifiers.HasFlag(ModifierKeys.Control):
+                // Ctrl+S is the reliable file fallback when clipboard ownership is busy.
+                if (_selection is { Bounds.Width: > 0, Bounds.Height: > 0 } || _committed.Count > 0)
+                {
+                    ExportAndClose(ExportKind.Save);
+                    e.Handled = true;
+                }
+                break;
+
             case Key.Z when Keyboard.Modifiers.HasFlag(ModifierKeys.Control) &&
                            Keyboard.Modifiers.HasFlag(ModifierKeys.Shift):
                 Redo();
@@ -3421,7 +3469,7 @@ public partial class OverlayWindow : Window
             return;
         }
 
-        Cursor = Cursors.Cross;
+        Cursor = CrosshairCursor.Instance;
     }
 
     /// <summary>
@@ -3452,7 +3500,7 @@ public partial class OverlayWindow : Window
         Handle.TopRight or Handle.BottomLeft => Cursors.SizeNESW,
         Handle.Top or Handle.Bottom => Cursors.SizeNS,
         Handle.Left or Handle.Right => Cursors.SizeWE,
-        _ => Cursors.Cross,
+        _ => CrosshairCursor.Instance,
     };
 
     // ---- Rendering -------------------------------------------------------------
@@ -3660,33 +3708,69 @@ public partial class OverlayWindow : Window
 
     private enum ExportKind { Copy, Save, SaveAs }
 
+    // async void because every caller is an event handler, so the whole body is wrapped:
+    // an exception escaping here has nobody to catch it and would take the process down
+    // instead of failing one export.
     private async void ExportAndClose(ExportKind kind)
+    {
+        try
+        {
+            await ExportAndCloseCore(kind);
+        }
+        catch (Exception ex)
+        {
+            IsExporting = false;
+            if (!_isClosed)
+            {
+                Show();
+                ShowExportNotice("Export failed. Ctrl+S saves to a file instead, Esc cancels.");
+            }
+            Log.Error("Export: failed", ex);
+        }
+    }
+
+    private async Task ExportAndCloseCore(ExportKind kind)
     {
         CommitText(); // bake any unfinished text into the document first
         Log.Info($"Export requested: {kind}; shape={_selection?.Kind}; bounds={_selection?.Bounds}.");
+        HideExportNotice(); // a new attempt supersedes whatever the last one said
         if (kind == ExportKind.Copy)
         {
+            // Set before hiding, not after: the host treats an invisible overlay as stuck
+            // and clears its reference, and a hotkey pressed in that gap would start a
+            // second capture on top of this one.
+            IsExporting = true;
             Hide();
         }
         if (!TryGetExportImage(out var image))
         {
             if (kind == ExportKind.Copy)
+            {
+                IsExporting = false;
                 Show();
+            }
             Log.Warn("Export: no valid selection to export.");
             return;
         }
         switch (kind)
         {
             case ExportKind.Copy:
-                var copied = await _exporter.CopyToClipboardAsync(image);
-                if (copied)
+                var copy = await _exporter.CopyToClipboardAsync(image);
+                IsExporting = false;
+                if (copy.Ok)
                     EndSession(produced: true);
                 else
                 {
-                    // Keep the editor available when all clipboard retries fail; the warning
-                    // and visible overlay make the failure actionable instead of silent.
+                    // The selection is kept rather than thrown away, but it must come back
+                    // saying why. Reappearing silently reads as the app re-entering capture
+                    // on its own, and pressing copy again just repeats the same failure —
+                    // which is exactly the loop this notice exists to break.
                     Show();
-                    Log.Warn("Export: copy failed after three attempts; selection remains open.");
+                    ShowExportNotice(copy.Blocker is null
+                        ? "Clipboard is busy — copy failed. Ctrl+S saves to a file instead, Esc cancels."
+                        : $"Clipboard is held by {copy.Blocker} — copy failed. " +
+                          "Ctrl+S saves to a file instead, Esc cancels.");
+                    Log.Warn("Export: copy failed; selection remains open.");
                 }
                 break;
 
@@ -3975,6 +4059,8 @@ public partial class OverlayWindow : Window
     protected override void OnClosed(EventArgs e)
     {
         _isClosed = true;
+        _exportNoticeTimer?.Stop();
+        _exportNoticeTimer = null;
         FrameView.Source = null;
         _frameBitmap = null;
         _history.Dispose();

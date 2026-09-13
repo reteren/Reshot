@@ -293,28 +293,36 @@ public partial class App : System.Windows.Application
         // at p95 for nothing. It costs nothing at rest either — this timer exists only
         // while the key is physically down, and is destroyed on release.
         _holdTimer?.Stop();
-        _holdTimer = new System.Windows.Threading.DispatcherTimer
+        // The tick stops the timer it belongs to, not whatever _holdTimer points at by then.
+        // A later press replaces the field, and a stale tick reaching for the field would
+        // stop the live timer and leave its own running.
+        var timer = new System.Windows.Threading.DispatcherTimer
         {
             Interval = TimeSpan.FromMilliseconds(8),
         };
-        _holdTimer.Tick += (_, _) =>
+        _holdTimer = timer;
+        timer.Tick += (_, _) =>
         {
             bool down = (NativeMethods.GetAsyncKeyState((int)vk) & 0x8000) != 0;
             double elapsed = (DateTime.UtcNow - _hotkeyDownAt).TotalMilliseconds;
             if (!down)
             {
-                _holdTimer!.Stop();
+                timer.Stop();
+                if (!ReferenceEquals(_holdTimer, timer))
+                    return; // superseded by a newer press; that one owns the outcome
                 _holdDetecting = false;
                 OnCaptureRequested("hotkey tap"); // released quickly → screenshot
             }
             else if (elapsed >= HoldThresholdMs)
             {
-                _holdTimer!.Stop();
+                timer.Stop();
+                if (!ReferenceEquals(_holdTimer, timer))
+                    return;
                 _holdDetecting = false;
                 OpenRadialMenu(vk); // held → radial menu, no frame involved
             }
         };
-        _holdTimer.Start();
+        timer.Start();
     }
 
     /// <summary>
@@ -351,7 +359,11 @@ public partial class App : System.Windows.Application
             _radial = null;
         }
 
-        if (_overlay is { IsVisible: false })
+        // An exporting overlay hides itself on purpose for the second a clipboard write
+        // takes, so invisible no longer means stuck. Clearing it there would drop the
+        // reference that stops a second capture, and the user would get a fresh overlay
+        // stacked on the one that is about to come back with its result.
+        if (_overlay is { IsVisible: false, IsExporting: false })
         {
             Log.Warn("Hotkey: the overlay is no longer visible but was never cleared; clearing.");
             _overlay = null;

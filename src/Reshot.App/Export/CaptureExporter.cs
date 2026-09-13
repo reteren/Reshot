@@ -3,6 +3,7 @@ using System.Windows;
 using System.Windows.Media;
 using System.Windows.Media.Imaging;
 using Microsoft.Win32;
+using Reshot.App.Interop;
 using Reshot.App.Overlay;
 using Reshot.Core;
 using Reshot.Core.Diagnostics;
@@ -14,6 +15,13 @@ using DataObject = System.Windows.DataObject;
 using SaveFileDialog = Microsoft.Win32.SaveFileDialog;
 
 namespace Reshot.App.Export;
+
+/// <summary>
+/// Outcome of a clipboard copy. <paramref name="Blocker"/> names the process that held the
+/// clipboard when the write failed, when one could be identified — the user cannot act on
+/// "copy failed", but they can act on which app is holding it.
+/// </summary>
+public readonly record struct ClipboardCopyResult(bool Ok, string? Blocker);
 
 /// <summary>
 /// Turns a selection region of the frozen frame into clipboard / file output
@@ -73,9 +81,9 @@ public sealed class CaptureExporter
     /// block the overlay dispatcher. The source image is frozen by the export path before this
     /// method is called, so it is safe to consume from the worker thread.
     /// </summary>
-    public Task<bool> CopyToClipboardAsync(BitmapSource image)
+    public Task<ClipboardCopyResult> CopyToClipboardAsync(BitmapSource image)
     {
-        var result = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
+        var result = new TaskCompletionSource<ClipboardCopyResult>(TaskCreationOptions.RunContinuationsAsynchronously);
         var thread = new Thread(() =>
         {
             try
@@ -85,7 +93,7 @@ public sealed class CaptureExporter
             catch (Exception ex)
             {
                 Log.Error("Export: clipboard worker failed", ex);
-                result.SetResult(false);
+                result.SetResult(new ClipboardCopyResult(false, null));
             }
         })
         {
@@ -97,7 +105,7 @@ public sealed class CaptureExporter
         return result.Task;
     }
 
-    private bool CopyToClipboardOnSta(BitmapSource image)
+    private ClipboardCopyResult CopyToClipboardOnSta(BitmapSource image)
     {
         // WPF itself retries ten times at 100 ms intervals before reporting a busy clipboard.
         // An outer retry would stack another full WPF wait and make a transient contention
@@ -106,12 +114,17 @@ public sealed class CaptureExporter
         {
             Clipboard.SetDataObject(BuildClipboardData(image), copy: true);
             Log.Info("Export: copied selection to clipboard.");
-            return true;
+            return new ClipboardCopyResult(true, null);
         }
         catch (Exception ex)
         {
-            Log.Warn($"Export: clipboard busy or unavailable: {ex.Message}");
-            return false;
+            // Asked here, on the failing thread, while the holder still has it. A clipboard
+            // manager takes the clipboard for a moment per change, so by the time a message
+            // reaches the screen the culprit has usually let go and cannot be named.
+            var holder = NativeMethods.DescribeClipboardHolder();
+            Log.Warn($"Export: clipboard busy or unavailable" +
+                     (holder is null ? string.Empty : $" (held by {holder})") + $": {ex.Message}");
+            return new ClipboardCopyResult(false, holder);
         }
     }
 
