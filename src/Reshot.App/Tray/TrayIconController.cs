@@ -60,6 +60,7 @@ public sealed class TrayIconController : IDisposable
     private const uint WM_USER = 0x0400;
     private const uint WM_TRAYCALLBACK = WM_USER + 101;
 
+    private const int WM_LBUTTONUP = 0x0202;
     private const int WM_LBUTTONDBLCLK = 0x0203;
     private const int WM_RBUTTONUP = 0x0205;
     private const int WM_CONTEXTMENU = 0x007B;
@@ -211,6 +212,7 @@ public sealed class TrayIconController : IDisposable
             var mouseMsg = lParam.ToInt32();
             switch (mouseMsg)
             {
+                case WM_LBUTTONUP:
                 case WM_RBUTTONUP:
                 case WM_CONTEXTMENU:
                     NativeMethods.SetForegroundWindow(_hwnd);

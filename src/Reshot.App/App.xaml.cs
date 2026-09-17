@@ -1,4 +1,4 @@
-﻿using System.IO;
+using System.IO;
 using System.Windows;
 using Reshot.App.Input;
 using Reshot.App.Interop;
@@ -969,7 +969,6 @@ public partial class App : System.Windows.Application
             menu.PauseHotkeyToggled -= onPause;
             menu.QuitRequested -= onQuit;
             menu.Closed -= onClosed;
-            menu.Content = null;
             if (ReferenceEquals(_trayMenu, menu))
                 _trayMenu = null;
         };
@@ -996,8 +995,23 @@ public partial class App : System.Windows.Application
 
         if (_settingsProcess is { HasExited: false })
         {
-            NativeMethods.SetForegroundWindow(_settingsProcess.MainWindowHandle);
-            return;
+            var hwnd = NativeMethods.FindSettingsWindow(_settingsProcess.Id);
+            if (hwnd != IntPtr.Zero)
+            {
+                NativeMethods.ShowWindow(hwnd, NativeMethods.SW_RESTORE);
+                NativeMethods.SetForegroundWindow(hwnd);
+                return;
+            }
+        }
+        else
+        {
+            var existingHwnd = NativeMethods.FindSettingsWindow(null);
+            if (existingHwnd != IntPtr.Zero)
+            {
+                NativeMethods.ShowWindow(existingHwnd, NativeMethods.SW_RESTORE);
+                NativeMethods.SetForegroundWindow(existingHwnd);
+                return;
+            }
         }
 
         var exe = ResolveSettingsExe();
@@ -1161,6 +1175,7 @@ public partial class App : System.Windows.Application
         {
             Log.Info("A second instance was launched; surfacing this one.");
             _tray?.ShowBalloon("Reshot", "Reshot is already running here.");
+            OnSettingsRequested(this, EventArgs.Empty);
         });
     }
 

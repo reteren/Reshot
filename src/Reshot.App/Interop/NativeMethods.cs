@@ -494,4 +494,36 @@ internal static class NativeMethods
             return $"pid {pid}";
         }
     }
+
+    [DllImport("user32.dll", SetLastError = true, CharSet = CharSet.Unicode)]
+    public static extern IntPtr FindWindow(string? lpClassName, string? lpWindowName);
+
+    [DllImport("user32.dll")]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    public static extern bool ShowWindow(IntPtr hWnd, int nCmdShow);
+
+    public const int SW_RESTORE = 9;
+
+    /// <summary>
+    /// Finds the HWND of the settings window (which may have a null MainWindowHandle due to borderless style).
+    /// </summary>
+    public static IntPtr FindSettingsWindow(int? processId = null)
+    {
+        var hwnd = FindWindow(null, "Reshot · settings");
+        if (hwnd != IntPtr.Zero)
+            return hwnd;
+
+        if (processId.HasValue && processId.Value > 0)
+        {
+            try
+            {
+                using var proc = System.Diagnostics.Process.GetProcessById(processId.Value);
+                if (proc.MainWindowHandle != IntPtr.Zero)
+                    return proc.MainWindowHandle;
+            }
+            catch { }
+        }
+
+        return IntPtr.Zero;
+    }
 }

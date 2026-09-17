@@ -45,8 +45,8 @@ public partial class TrayMenuWindow : Window
         PauseCheck.Click += (_, _) =>
         {
             var paused = PauseCheck.IsChecked == true;
-            CloseOnce();
             PauseHotkeyToggled?.Invoke(this, paused);
+            CloseOnce();
         };
 
         // Clicking anywhere else dismisses the menu, like a real context menu.
@@ -64,34 +64,7 @@ public partial class TrayMenuWindow : Window
             return;
 
         _closing = true;
-        if (Mouse.Captured is not null && IsDescendant(Mouse.Captured as DependencyObject))
-        {
-            Mouse.Capture(null);
-        }
         Close();
-    }
-
-    protected override void OnPreviewMouseDown(MouseButtonEventArgs e)
-    {
-        base.OnPreviewMouseDown(e);
-        var pos = e.GetPosition(this);
-        if (pos.X < 0 || pos.X > ActualWidth || pos.Y < 0 || pos.Y > ActualHeight)
-        {
-            CloseOnce();
-        }
-    }
-
-    protected override void OnLostMouseCapture(MouseEventArgs e)
-    {
-        base.OnLostMouseCapture(e);
-        if (_closing)
-            return;
-
-        var captured = Mouse.Captured as DependencyObject;
-        if (captured is null || !IsDescendant(captured))
-        {
-            CloseOnce();
-        }
     }
 
     protected override void OnPreviewKeyDown(KeyEventArgs e)
@@ -104,40 +77,16 @@ public partial class TrayMenuWindow : Window
         }
     }
 
-    private bool IsDescendant(DependencyObject? element)
-    {
-        while (element is not null)
-        {
-            if (ReferenceEquals(element, this))
-                return true;
-
-            DependencyObject? parent = null;
-            if (element is Visual or System.Windows.Media.Media3D.Visual3D)
-            {
-                parent = VisualTreeHelper.GetParent(element);
-            }
-            parent ??= LogicalTreeHelper.GetParent(element);
-            element = parent;
-        }
-        return false;
-    }
-
     protected override void OnClosing(System.ComponentModel.CancelEventArgs e)
     {
         _closing = true;
         base.OnClosing(e);
     }
 
-    protected override void OnClosed(EventArgs e)
-    {
-        Content = null;
-        base.OnClosed(e);
-    }
-
     private void Fire(EventHandler? handler)
     {
-        CloseOnce();
         handler?.Invoke(this, EventArgs.Empty);
+        CloseOnce();
     }
 
     /// <summary>
@@ -190,9 +139,5 @@ public partial class TrayMenuWindow : Window
         Top = Math.Min(top, workBottom - ActualHeight);
 
         Activate();
-
-        // Fallback dismissal: capture mouse within this visual subtree so any outside click
-        // dismisses the menu even if Windows foreground arbitration failed.
-        Mouse.Capture(this, CaptureMode.SubTree);
     }
 }
