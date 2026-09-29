@@ -461,10 +461,13 @@ public sealed class RadialMenuWindow : Window
         var fade = new DoubleAnimation(0, Secs(0.16));
         fade.Completed += (_, _) =>
         {
+            // Snapshot the handlers before closing: Close() raises Closed synchronously, and
+            // the owner unsubscribes there, so reading Chosen afterwards finds it empty.
             var result = _result;
+            var chosen = Chosen;
             Close();
             if (result is RadialChoice c)
-                Chosen?.Invoke(c);
+                chosen?.Invoke(c);
         };
         _wheel.BeginAnimation(OpacityProperty, fade);
     }

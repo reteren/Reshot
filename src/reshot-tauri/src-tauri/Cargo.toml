@@ -1,6 +1,6 @@
 [package]
 name = "reshot-tauri"
-version = "1.2.3"
+version = "1.2.4"
 description = "Reshot settings"
 authors = ["Reshot"]
 edition = "2021"
