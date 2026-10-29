@@ -101,8 +101,11 @@ mod tests {
         std::fs::write(&path, vec![b'x'; (MAX_LOG_BYTES + 10) as usize]).unwrap();
         set_log_file(Some(path.clone()));
         log::info!("after");
-        let len = std::fs::metadata(&path).unwrap().len();
-        assert!(len < 200, "log was not truncated: {len}");
+        // Other tests run in parallel and may log into the same global file, so check that the
+        // oversized content is gone rather than an exact length.
+        let text = std::fs::read_to_string(&path).unwrap();
+        assert!(!text.starts_with('x'), "log was not truncated");
+        assert!((text.len() as u64) < MAX_LOG_BYTES / 2);
         set_log_file(None);
     }
 }
