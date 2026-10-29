@@ -2,6 +2,7 @@
 //! settings, hotkey parsing, the session state machine and the logger.
 
 pub mod document;
+pub mod editor;
 pub mod export;
 pub mod filename;
 pub mod fonts;
@@ -9,6 +10,7 @@ pub mod history;
 pub mod hotkey;
 pub mod log;
 pub mod paths;
+pub mod selection;
 pub mod session;
 pub mod settings;
 pub mod tools;
