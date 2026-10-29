@@ -5,7 +5,7 @@ use std::path::PathBuf;
 use std::sync::LazyLock;
 
 fn known(dir: Option<PathBuf>) -> PathBuf {
-    dir.unwrap_or_else(|| std::env::temp_dir()).join("reshot")
+    dir.unwrap_or_else(std::env::temp_dir).join("reshot")
 }
 
 /// `%AppData%\reshot`, root of all persisted state.

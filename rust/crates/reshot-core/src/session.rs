@@ -1,9 +1,10 @@
 //! The session state machine from ARCHITECTURE §8. Guards transitions so the app cannot
 //! slip into an illegal state, and logs every move.
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
 pub enum SessionState {
     /// Asleep in the tray; no overlay.
+    #[default]
     Idle,
     /// Freezing the screen (taking the snapshot).
     Capturing,
@@ -39,11 +40,6 @@ pub struct SessionStateMachine {
     listeners: Vec<Listener>,
 }
 
-impl Default for SessionState {
-    fn default() -> Self {
-        SessionState::Idle
-    }
-}
 
 impl SessionStateMachine {
     pub fn new() -> Self {
