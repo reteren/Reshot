@@ -42,6 +42,12 @@ fn executable_path() -> PathBuf {
 /// setting; false at startup, where a prompt on every boot would be intolerable, so a
 /// mismatch is reported rather than fixed.
 pub fn apply(enabled: bool, elevated: bool, allow_prompt: bool) -> bool {
+    // A development build shares settings.json with the installed Reshot; applying it here
+    // would point the user's autostart at target\debug.
+    if cfg!(debug_assertions) {
+        log::info!("Autostart: skipped in a debug build.");
+        return elevated && is_elevated_task_current();
+    }
     let elevated_active = enabled && elevated && ensure_task(allow_prompt);
     // Only removed when it exists, so a lane that was never created cannot cost a second
     // prompt after the first was declined.

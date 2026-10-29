@@ -79,7 +79,9 @@ pub fn set_log_file(path: Option<PathBuf>) {
 /// Called once at startup: `%AppData%\reshot\logs\reshot.log`.
 pub fn init() {
     let _ = crate::paths::ensure_app_data_dir();
-    set_log_file(Some(crate::paths::LOGS_DIR.join("reshot.log")));
+    // A debug build logs to its own file so it can run next to an installed Reshot.
+    let name = if cfg!(debug_assertions) { "reshot-dev.log" } else { "reshot.log" };
+    set_log_file(Some(crate::paths::LOGS_DIR.join(name)));
     log::info!("=== Reshot session started (pid {}) ===", std::process::id());
 }
 

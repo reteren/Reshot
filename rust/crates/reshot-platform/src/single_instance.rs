@@ -11,6 +11,17 @@ use windows::core::w;
 
 use crate::shell::ShellEvent;
 
+// Debug builds use their own names, so a development build runs next to an installed Reshot
+// instead of signalling it and exiting.
+#[cfg(debug_assertions)]
+const MUTEX_NAME: windows::core::PCWSTR = w!("Local\\reshot-dev.singleinstance.mutex");
+#[cfg(debug_assertions)]
+const EVENT_NAME: windows::core::PCWSTR = w!("Local\\reshot-dev.singleinstance.signal");
+#[cfg(not(debug_assertions))]
+const MUTEX_NAME: windows::core::PCWSTR = w!("Local\\reshot.singleinstance.mutex");
+#[cfg(not(debug_assertions))]
+const EVENT_NAME: windows::core::PCWSTR = w!("Local\\reshot.singleinstance.signal");
+
 pub struct SingleInstance {
     mutex: HANDLE,
 }
@@ -24,9 +35,9 @@ impl SingleInstance {
     pub fn acquire(events: async_channel::Sender<ShellEvent>) -> Option<Self> {
         // SAFETY: named kernel objects in the per-user Local\ namespace.
         unsafe {
-            let mutex = CreateMutexW(None, true, w!("Local\\reshot.singleinstance.mutex")).ok()?;
+            let mutex = CreateMutexW(None, true, MUTEX_NAME).ok()?;
             if GetLastError() == ERROR_ALREADY_EXISTS {
-                if let Ok(ev) = OpenEventW(EVENT_MODIFY_STATE, false, w!("Local\\reshot.singleinstance.signal")) {
+                if let Ok(ev) = OpenEventW(EVENT_MODIFY_STATE, false, EVENT_NAME) {
                     let _ = SetEvent(ev);
                     let _ = CloseHandle(ev);
                     log::info!("SingleInstance: signalled the running instance.");
@@ -34,7 +45,7 @@ impl SingleInstance {
                 let _ = CloseHandle(mutex);
                 return None;
             }
-            let event = CreateEventW(None, false, false, w!("Local\\reshot.singleinstance.signal")).ok()?;
+            let event = CreateEventW(None, false, false, EVENT_NAME).ok()?;
             let raw = event.0 as isize;
             std::thread::Builder::new()
                 .name("single-instance".into())

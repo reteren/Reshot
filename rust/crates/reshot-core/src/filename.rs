@@ -1,7 +1,12 @@
 //! Output file names from the user's template (SPEC §15). Supports `{date}` and `{time}`;
 //! anything else is kept verbatim. Pure: no file-system access here.
 
-use chrono::NaiveDateTime;
+pub use chrono::NaiveDateTime;
+
+/// Local wall-clock time, which is what the file name shows.
+pub fn now() -> NaiveDateTime {
+    chrono::Local::now().naive_local()
+}
 
 pub const DEFAULT_TEMPLATE: &str = "Reshot_{date}_{time}";
 

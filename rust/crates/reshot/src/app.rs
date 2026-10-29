@@ -1,0 +1,321 @@
+//! Composition root: owns settings, the shell thread, the capture service and the windows,
+//! and routes shell events (hotkeys, tray) to them. Holds no editing or capture logic.
+
+use std::sync::Arc;
+use std::time::{Duration, Instant};
+
+use gpui::{App, AppContext, AsyncApp, Global, WindowHandle};
+use reshot_capture::ScreenCaptureService;
+use reshot_core::hotkey::HotkeyDefinition;
+use reshot_core::session::{SessionState, SessionStateMachine};
+use reshot_core::settings::SettingsService;
+use reshot_platform::shell::{BalloonIcon, HotkeySlot, Shell, ShellEvent};
+use reshot_platform::single_instance::SingleInstance;
+use reshot_platform::{autostart, win};
+
+use crate::overlay::Overlay;
+use crate::tray_menu::TrayMenu;
+use crate::winutil;
+
+/// Holding the hotkey longer than this opens the radial menu instead of capturing.
+const HOLD_THRESHOLD: Duration = Duration::from_millis(250);
+/// Hold-detection poll interval. It is pure added latency after the finger leaves the key, so
+/// it is as short as is worth making; it only runs while the key is physically down.
+const HOLD_POLL: Duration = Duration::from_millis(8);
+
+pub struct ReshotApp {
+    pub settings: SettingsService,
+    shell: Shell,
+    _single: SingleInstance,
+    capture: Arc<ScreenCaptureService>,
+    session: SessionStateMachine,
+    paused: bool,
+    main_vk: u32,
+    hold_detecting: bool,
+    /// Bumped by every press; a hold poll from an older press gives up.
+    press_generation: u64,
+    /// Bumped by every capture; a frame that comes back under an old number was superseded
+    /// and is dropped, so a slow capture never opens a session on a screen the user left.
+    capture_generation: u64,
+    overlay: Option<WindowHandle<Overlay>>,
+    tray_menu: Option<WindowHandle<TrayMenu>>,
+}
+
+impl Global for ReshotApp {}
+
+pub fn init(
+    cx: &mut App,
+    mut settings: SettingsService,
+    shell: Shell,
+    single: SingleInstance,
+    events: async_channel::Receiver<ShellEvent>,
+    capture_now: bool,
+) {
+    settings.load();
+    let s = settings.current().clone();
+
+    // gpui on Windows quits when its last window closes. A tray utility has no window most of
+    // the time, so one invisible window anchors the process for its whole life.
+    open_anchor(cx);
+
+    let mut app = ReshotApp {
+        settings,
+        shell,
+        _single: single,
+        capture: Arc::new(ScreenCaptureService::new()),
+        session: SessionStateMachine::new(),
+        paused: false,
+        main_vk: 0,
+        hold_detecting: false,
+        press_generation: 0,
+        capture_generation: 0,
+        overlay: None,
+        tray_menu: None,
+    };
+    app.register_main_hotkey(&s.hotkey);
+    app.register_audio_hotkey(&s.audio_hotkey);
+    cx.set_global(app);
+
+    // Off the UI thread: schtasks queries and the WinRT access request are slow, and the
+    // hotkey and tray are what the user is waiting for.
+    let (enabled, elevated) = (s.autostart, s.autostart_elevated);
+    cx.background_spawn(async move {
+        autostart::apply(enabled, elevated, false);
+        reshot_capture::request_borderless_access();
+    })
+    .detach();
+
+    cx.spawn(async move |cx: &mut AsyncApp| {
+        while let Ok(event) = events.recv().await {
+            if cx.update(|cx| on_shell_event(event, cx)).is_err() {
+                break;
+            }
+        }
+    })
+    .detach();
+
+    if capture_now {
+        cx.spawn(async move |cx: &mut AsyncApp| {
+            let _ = cx.update(|cx| capture(cx, "cli --capture"));
+        })
+        .detach();
+    }
+    log::info!("Startup: ready (idle in tray).");
+}
+
+fn open_anchor(cx: &mut App) {
+    let mut opts = winutil::popup_options(winutil::logical(win::PxRect { left: -32000, top: -32000, right: -31999, bottom: -31999 }, 1.0), false);
+    opts.show = false;
+    if let Err(e) = cx.open_window(opts, |_, cx| cx.new(|_| Anchor)) {
+        log::error!("Startup: could not open the anchor window: {e}");
+    }
+}
+
+struct Anchor;
+
+impl gpui::Render for Anchor {
+    fn render(&mut self, _: &mut gpui::Window, _: &mut gpui::Context<Self>) -> impl gpui::IntoElement {
+        gpui::Empty
+    }
+}
+
+impl ReshotApp {
+    fn register_main_hotkey(&mut self, text: &str) {
+        match HotkeyDefinition::parse(text) {
+            Ok(def) => {
+                self.main_vk = def.virtual_key;
+                if let Err(e) = self.shell.register_hotkey(HotkeySlot::Main, &def) {
+                    log::error!("{e}");
+                    self.shell.show_balloon(
+                        "Reshot: hotkey unavailable",
+                        &format!("Could not register '{text}'. It may be in use by another app. Pick another in Settings."),
+                        BalloonIcon::Warning,
+                    );
+                }
+            }
+            Err(e) => log::error!("Hotkey: cannot parse '{text}': {e}"),
+        }
+    }
+
+    fn register_audio_hotkey(&mut self, text: &str) {
+        self.shell.unregister_hotkey(HotkeySlot::Audio);
+        if text.trim().is_empty() {
+            return;
+        }
+        match HotkeyDefinition::parse(text) {
+            Ok(def) => {
+                if let Err(e) = self.shell.register_hotkey(HotkeySlot::Audio, &def) {
+                    log::error!("{e}");
+                }
+            }
+            Err(e) => log::error!("Audio hotkey: cannot parse '{text}': {e}"),
+        }
+    }
+}
+
+fn on_shell_event(event: ShellEvent, cx: &mut App) {
+    match event {
+        ShellEvent::Hotkey(HotkeySlot::Main) => on_hotkey(cx),
+        ShellEvent::Hotkey(HotkeySlot::Audio) => log::info!("Audio hotkey pressed."),
+        ShellEvent::TrayMenu => show_tray_menu(cx),
+        ShellEvent::TrayCapture => capture(cx, "tray"),
+        ShellEvent::SecondInstance => {
+            log::info!("SingleInstance: another launch was redirected here.");
+            let app = cx.global::<ReshotApp>();
+            app.shell.show_balloon("Reshot is already running", "It lives in the tray.", BalloonIcon::Info);
+        }
+    }
+}
+
+/// Main hotkey pressed. A quick tap is a screenshot; holding it past [`HOLD_THRESHOLD`] opens
+/// the radial menu. Telling them apart needs key-up, which RegisterHotKey does not give, so
+/// the key is polled while it is held, and only then.
+fn on_hotkey(cx: &mut App) {
+    let app = cx.global::<ReshotApp>();
+    log::info!(
+        "Hotkey pressed [overlay={}, holdDetecting={}, paused={}].",
+        app.overlay.is_some(),
+        app.hold_detecting,
+        app.paused
+    );
+    if let Some(overlay) = app.overlay {
+        // The overlay is already up: pull it back in front. A game that took the foreground
+        // back is exactly when the user presses again.
+        let _ = overlay.update(cx, |_, window, _| {
+            if let Some(h) = winutil::hwnd(window) {
+                win::force_foreground(h, true);
+            }
+            window.activate_window();
+        });
+        return;
+    }
+    if app.hold_detecting {
+        return;
+    }
+    let vk = app.main_vk;
+    if vk == 0 {
+        capture(cx, "hotkey");
+        return;
+    }
+    let generation = {
+        let app = cx.global_mut::<ReshotApp>();
+        app.hold_detecting = true;
+        app.press_generation += 1;
+        app.press_generation
+    };
+    // Nothing is captured until the press is known to be a tap: opening a capture session
+    // takes the cursor off its hardware plane, one visible blink, and a hold never needs
+    // a frame at all.
+    let started = Instant::now();
+    cx.spawn(async move |cx: &mut AsyncApp| {
+        loop {
+            cx.background_executor().timer(HOLD_POLL).await;
+            let down = win::is_key_down(vk);
+            let held = started.elapsed() >= HOLD_THRESHOLD;
+            if down && !held {
+                continue;
+            }
+            let _ = cx.update(|cx| {
+                let app = cx.global_mut::<ReshotApp>();
+                if app.press_generation != generation {
+                    return; // superseded by a newer press; that one owns the outcome
+                }
+                app.hold_detecting = false;
+                if down {
+                    log::info!("Hotkey held: radial menu.");
+                    crate::radial::open(cx, vk);
+                } else {
+                    capture(cx, "hotkey tap");
+                }
+            });
+            break;
+        }
+    })
+    .detach();
+}
+
+/// Freezes every monitor on a worker thread, then opens the overlay. Device creation plus the
+/// wait for the first frame is the bulk of hotkey-to-overlay time; on the UI thread it froze
+/// the app instead of merely delaying it.
+pub fn capture(cx: &mut App, source: &'static str) {
+    let app = cx.global_mut::<ReshotApp>();
+    if app.overlay.is_some() {
+        return;
+    }
+    if !app.session.try_transition(SessionState::Capturing) {
+        return;
+    }
+    app.capture_generation += 1;
+    let generation = app.capture_generation;
+    let service = app.capture.clone();
+    log::info!("Capture requested ({source}).");
+    let started = Instant::now();
+    cx.spawn(async move |cx: &mut AsyncApp| {
+        let result = cx.background_executor().spawn(async move { service.snapshot_all_monitors() }).await;
+        let _ = cx.update(|cx| {
+            let app = cx.global_mut::<ReshotApp>();
+            if app.capture_generation != generation {
+                log::info!("Capture: dropped a superseded frame.");
+                return;
+            }
+            match result {
+                Ok(frame) => {
+                    log::info!("Capture: {}x{} in {} ms.", frame.width, frame.height, started.elapsed().as_millis());
+                    let settings = app.settings.current().clone();
+                    let handle = Overlay::open(frame, settings, cx);
+                    let app = cx.global_mut::<ReshotApp>();
+                    app.overlay = handle;
+                    if app.overlay.is_some() {
+                        app.session.try_transition(SessionState::Selecting);
+                    } else {
+                        app.session.reset();
+                    }
+                }
+                Err(e) => {
+                    log::error!("Capture failed: {e:#}");
+                    app.session.reset();
+                    app.shell.show_balloon("Reshot: capture failed", &format!("{e}"), BalloonIcon::Error);
+                }
+            }
+        });
+    })
+    .detach();
+}
+
+pub fn overlay_closed(cx: &mut App) {
+    let app = cx.global_mut::<ReshotApp>();
+    app.overlay = None;
+    app.session.reset();
+}
+
+fn show_tray_menu(cx: &mut App) {
+    if let Some(menu) = cx.global::<ReshotApp>().tray_menu
+        && menu.update(cx, |_, window, _| window.activate_window()).is_ok()
+    {
+        return;
+    }
+    let paused = cx.global::<ReshotApp>().paused;
+    let menu = TrayMenu::open(paused, cx);
+    cx.global_mut::<ReshotApp>().tray_menu = menu;
+}
+
+pub fn set_paused(cx: &mut App, paused: bool) {
+    let app = cx.global_mut::<ReshotApp>();
+    app.paused = paused;
+    if paused {
+        app.shell.unregister_hotkey(HotkeySlot::Main);
+        log::info!("Hotkey paused from the tray.");
+    } else {
+        let hotkey = app.settings.current().hotkey.clone();
+        app.register_main_hotkey(&hotkey);
+    }
+}
+
+pub fn open_settings(cx: &mut App) {
+    crate::settings_window::open(cx);
+}
+
+pub fn quit(cx: &mut App) {
+    log::info!("Quit requested.");
+    cx.quit();
+}

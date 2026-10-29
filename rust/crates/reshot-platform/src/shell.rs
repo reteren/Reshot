@@ -101,9 +101,8 @@ thread_local! {
 
 impl Shell {
     /// Starts the shell thread with the tray icon from resource `icon_resource_id` of the
-    /// executable (falls back to the stock application icon).
-    pub fn start(icon_resource_id: u16, tooltip: &str) -> Result<(Shell, async_channel::Receiver<ShellEvent>)> {
-        let (events_tx, events_rx) = async_channel::unbounded();
+    /// executable (falls back to the stock application icon). Events go to `events_tx`.
+    pub fn start(icon_resource_id: u16, tooltip: &str, events_tx: async_channel::Sender<ShellEvent>) -> Result<Shell> {
         let (cmd_tx, cmd_rx) = mpsc::channel();
         let (ready_tx, ready_rx) = mpsc::channel::<Result<isize>>();
         let tooltip = tooltip.to_string();
@@ -112,7 +111,7 @@ impl Shell {
             .name("reshot-shell".into())
             .spawn(move || run(icon_resource_id, tooltip, cmd_rx, events, ready_tx))?;
         let hwnd = ready_rx.recv().context("shell thread died during start-up")??;
-        Ok((Shell { hwnd, commands: cmd_tx, thread: Some(thread), events: events_tx }, events_rx))
+        Ok(Shell { hwnd, commands: cmd_tx, thread: Some(thread), events: events_tx })
     }
 
     /// A sender other parts of the app (single instance) can post events through.

@@ -3028,6 +3028,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "libwebp-sys"
+version = "0.9.6"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "54cd30df7c7165ce74a456e4ca9732c603e8dc5e60784558c1c6dc047f876733"
+dependencies = [
+ "cc",
+ "glob",
+]
+
+[[package]]
 name = "linux-raw-sys"
 version = "0.4.15"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -4437,14 +4447,23 @@ name = "reshot"
 version = "2.0.0"
 dependencies = [
  "anyhow",
+ "async-channel 2.5.0",
  "gpui",
+ "image",
+ "log",
+ "parking_lot",
  "raw-window-handle",
+ "reshot-capture",
+ "reshot-core",
+ "reshot-platform",
+ "smallvec",
  "windows 0.61.3",
+ "winresource",
 ]
 
 [[package]]
 name = "reshot-capture"
-version = "0.1.0"
+version = "2.0.0"
 dependencies = [
  "anyhow",
  "log",
@@ -4465,11 +4484,18 @@ dependencies = [
  "skia-safe",
  "tempfile",
  "tiny-skia",
+ "webp",
 ]
 
 [[package]]
 name = "reshot-ocr"
-version = "0.1.0"
+version = "2.0.0"
+dependencies = [
+ "anyhow",
+ "log",
+ "png 0.17.16",
+ "windows 0.61.3",
+]
 
 [[package]]
 name = "reshot-platform"
@@ -4484,7 +4510,7 @@ dependencies = [
 
 [[package]]
 name = "reshot-recording"
-version = "0.1.0"
+version = "2.0.0"
 dependencies = [
  "anyhow",
  "log",
@@ -6364,6 +6390,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "webp"
+version = "0.3.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "c071456adef4aca59bf6a583c46b90ff5eb0b4f758fc347cea81290288f37ce1"
+dependencies = [
+ "image",
+ "libwebp-sys",
+]
+
+[[package]]
 name = "weezl"
 version = "0.1.12"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -6880,6 +6916,16 @@ checksum = "7d6f32a0ff4a9f6f01231eb2059cc85479330739333e0e58cadf03b6af2cca10"
 dependencies = [
  "cfg-if",
  "windows-sys 0.61.2",
+]
+
+[[package]]
+name = "winresource"
+version = "0.1.34"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "a2bc6d36480b829272a5bdabf08e6dca8004761c1da7e35efef800540c66221b"
+dependencies = [
+ "toml 1.1.8+spec-1.1.0",
+ "version_check",
 ]
 
 [[package]]
