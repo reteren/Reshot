@@ -1,14 +1,8 @@
-pub fn add(left: u64, right: u64) -> u64 {
-    left + right
-}
+//! Reshot's Windows integration outside capture and recording: the resident shell thread
+//! (global hotkeys, tray icon), single instance, autostart, clipboard and window helpers.
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn it_works() {
-        let result = add(2, 2);
-        assert_eq!(result, 4);
-    }
-}
+pub mod autostart;
+pub mod clipboard;
+pub mod shell;
+pub mod single_instance;
+pub mod win;

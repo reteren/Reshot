@@ -4473,11 +4473,25 @@ version = "0.1.0"
 
 [[package]]
 name = "reshot-platform"
-version = "0.1.0"
+version = "2.0.0"
+dependencies = [
+ "anyhow",
+ "async-channel 2.5.0",
+ "log",
+ "reshot-core",
+ "windows 0.61.3",
+]
 
 [[package]]
 name = "reshot-recording"
 version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "log",
+ "reshot-capture",
+ "wasapi",
+ "windows 0.61.3",
+]
 
 [[package]]
 name = "resvg"
@@ -6135,6 +6149,20 @@ dependencies = [
 ]
 
 [[package]]
+name = "wasapi"
+version = "0.19.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "a44f8b836526917dd6b4ca0ca163394df7cadae249ee6a8b10d36ee4265298c9"
+dependencies = [
+ "log",
+ "num-integer",
+ "thiserror 2.0.21",
+ "widestring",
+ "windows 0.61.3",
+ "windows-core 0.61.2",
+]
+
+[[package]]
 name = "wasi"
 version = "0.11.1+wasi-snapshot-preview1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -6352,6 +6380,12 @@ dependencies = [
  "rustix 0.38.44",
  "winsafe",
 ]
+
+[[package]]
+name = "widestring"
+version = "1.2.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "72069c3113ab32ab29e5584db3c6ec55d416895e60715417b5b883a357c3e471"
 
 [[package]]
 name = "winapi"
