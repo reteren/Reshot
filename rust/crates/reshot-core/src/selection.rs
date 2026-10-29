@@ -2,7 +2,7 @@
 //! draw, move and resize them. Everything here is in frame pixels; tolerances that the C#
 //! build expressed in DIPs are multiplied by the display scale by the caller.
 
-use skia_safe::{Path, PathBuilder, Point, Rect};
+use skia_safe::{Color, IRect, Paint, Path, PathBuilder, Point, Rect};
 
 /// The selection sub-tools from SPEC §4.2.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Default)]
@@ -26,13 +26,21 @@ pub struct Selection {
 
 impl Selection {
     pub fn new(kind: ShapeKind, bounds: Rect) -> Self {
-        Self { kind, bounds, normalized: Vec::new() }
+        Self {
+            kind,
+            bounds,
+            normalized: Vec::new(),
+        }
     }
 
     /// A lasso or polygon from absolute points.
     pub fn from_points(kind: ShapeKind, points: &[Point]) -> Self {
         let bounds = bounds_of(points);
-        Self { kind, bounds, normalized: normalize(points, bounds) }
+        Self {
+            kind,
+            bounds,
+            normalized: normalize(points, bounds),
+        }
     }
 
     pub fn is_freeform(&self) -> bool {
@@ -56,14 +64,18 @@ impl Selection {
             ShapeKind::Triangle => {
                 // Apex at top-centre, base along the bottom edge, inscribed in the box.
                 let mut p = PathBuilder::new();
-                p.move_to((b.center_x(), b.top)).line_to((b.right, b.bottom)).line_to((b.left, b.bottom)).close();
+                p.move_to((b.center_x(), b.top))
+                    .line_to((b.right, b.bottom))
+                    .line_to((b.left, b.bottom))
+                    .close();
                 p.detach()
             }
             ShapeKind::Lasso | ShapeKind::Polygon => {
                 if self.normalized.len() < 2 {
                     return Path::rect(b, None);
                 }
-                let map = |n: &Point| Point::new(b.left + n.x * b.width(), b.top + n.y * b.height());
+                let map =
+                    |n: &Point| Point::new(b.left + n.x * b.width(), b.top + n.y * b.height());
                 let mut p = PathBuilder::new();
                 p.move_to(map(&self.normalized[0]));
                 for n in &self.normalized[1..] {
@@ -91,9 +103,20 @@ pub fn bounds_of(points: &[Point]) -> Rect {
 }
 
 pub fn normalize(points: &[Point], bounds: Rect) -> Vec<Point> {
-    let w = if bounds.width() <= 0.0 { 1.0 } else { bounds.width() };
-    let h = if bounds.height() <= 0.0 { 1.0 } else { bounds.height() };
-    points.iter().map(|p| Point::new((p.x - bounds.left) / w, (p.y - bounds.top) / h)).collect()
+    let w = if bounds.width() <= 0.0 {
+        1.0
+    } else {
+        bounds.width()
+    };
+    let h = if bounds.height() <= 0.0 {
+        1.0
+    } else {
+        bounds.height()
+    };
+    points
+        .iter()
+        .map(|p| Point::new((p.x - bounds.left) / w, (p.y - bounds.top) / h))
+        .collect()
 }
 
 /// Rect spanned by a fixed anchor and a moving corner. With a ratio (width/height) the
@@ -154,7 +177,10 @@ impl Handle {
     }
 
     pub fn is_corner(self) -> bool {
-        matches!(self, Handle::TopLeft | Handle::TopRight | Handle::BottomLeft | Handle::BottomRight)
+        matches!(
+            self,
+            Handle::TopLeft | Handle::TopRight | Handle::BottomLeft | Handle::BottomRight
+        )
     }
 }
 
@@ -232,7 +258,10 @@ pub struct RatioLock {
 
 impl RatioLock {
     pub fn start(shift: bool) -> Self {
-        Self { shift_at_start: shift, locked: None }
+        Self {
+            shift_at_start: shift,
+            locked: None,
+        }
     }
 
     pub fn ratio(&mut self, shift_now: bool, current: Rect) -> Option<f32> {
@@ -259,7 +288,9 @@ pub struct SelectionSet {
 
 impl SelectionSet {
     pub fn all(&self) -> impl Iterator<Item = &Selection> {
-        self.committed.iter().chain(self.active.iter().filter(|s| s.has_area()))
+        self.committed
+            .iter()
+            .chain(self.active.iter().filter(|s| s.has_area()))
     }
 
     pub fn is_empty(&self) -> bool {
@@ -270,7 +301,9 @@ impl SelectionSet {
     pub fn clip_path(&self) -> Option<Path> {
         let mut it = self.all();
         let first = it.next()?.path();
-        Some(it.fold(first, |acc, s| acc.op(&s.path(), skia_safe::PathOp::Union).unwrap_or(acc)))
+        Some(it.fold(first, |acc, s| {
+            acc.op(&s.path(), skia_safe::PathOp::Union).unwrap_or(acc)
+        }))
     }
 
     /// Union of the bounding boxes.
@@ -297,7 +330,9 @@ impl SelectionSet {
 
     /// Index of the top-most committed selection whose edge band is under `p`.
     pub fn hit_committed(&self, p: Point, tol: f32) -> Option<usize> {
-        (0..self.committed.len()).rev().find(|&i| is_on_edge(self.committed[i].bounds, p, tol))
+        (0..self.committed.len())
+            .rev()
+            .find(|&i| is_on_edge(self.committed[i].bounds, p, tol))
     }
 
     /// Makes committed selection `i` the active one, demoting the current active.
@@ -307,6 +342,104 @@ impl SelectionSet {
             self.committed.push(cur);
         }
         self.active = Some(picked);
+    }
+}
+
+impl SelectionSet {
+    /// Every selection's bounds rounded to whole frame pixels, and their union, clamped to a
+    /// `width` x `height` frame. This is what export crops and what recording captures.
+    pub fn pixel_union(&self, width: i32, height: i32) -> Option<IRect> {
+        let mut u: Option<IRect> = None;
+        for s in self.all() {
+            let b = s.bounds;
+            let r = IRect::from_ltrb(
+                (b.left.round() as i32).clamp(0, width),
+                (b.top.round() as i32).clamp(0, height),
+                (b.right.round() as i32).clamp(0, width),
+                (b.bottom.round() as i32).clamp(0, height),
+            );
+            u = Some(match u {
+                Some(a) => IRect::join(&a, &r),
+                None => r,
+            });
+        }
+        u.filter(|r| r.width() > 0 && r.height() > 0)
+    }
+
+    /// An 8-bit coverage mask of the selected shapes over `union` (row-major, stride =
+    /// width, 255 inside, 0 outside). `None` for a single plain rectangle: nothing to mask.
+    pub fn recording_mask(&self, union: IRect) -> Option<Vec<u8>> {
+        let all: Vec<&Selection> = self.all().collect();
+        if all.len() == 1 && all[0].kind == ShapeKind::Rectangle {
+            return None;
+        }
+        let mut bmp = crate::document::new_bitmap(union.width(), union.height());
+        crate::document::with_canvas(&mut bmp, |c| {
+            c.translate((-union.left as f32, -union.top as f32));
+            let mut p = Paint::default();
+            p.set_color(Color::WHITE);
+            p.set_anti_alias(true);
+            for s in &all {
+                c.draw_path(&s.path(), &p);
+            }
+        });
+        let rb = bmp.row_bytes();
+        let px = crate::document::pixels(&bmp);
+        let (w, h) = (union.width() as usize, union.height() as usize);
+        let mut mask = Vec::with_capacity(w * h);
+        for y in 0..h {
+            for x in 0..w {
+                mask.push(px[y * rb + x * 4 + 3]);
+            }
+        }
+        Some(mask)
+    }
+}
+
+#[cfg(test)]
+mod mask_tests {
+    use super::*;
+
+    #[test]
+    fn plain_rectangle_needs_no_mask_and_shapes_do() {
+        let rect = SelectionSet {
+            active: Some(Selection::new(
+                ShapeKind::Rectangle,
+                Rect::from_ltrb(0.0, 0.0, 10.0, 10.0),
+            )),
+            ..Default::default()
+        };
+        let u = rect.pixel_union(100, 100).unwrap();
+        assert_eq!(u, IRect::from_ltrb(0, 0, 10, 10));
+        assert!(rect.recording_mask(u).is_none());
+
+        let ellipse = SelectionSet {
+            active: Some(Selection::new(
+                ShapeKind::Ellipse,
+                Rect::from_ltrb(0.0, 0.0, 20.0, 20.0),
+            )),
+            ..Default::default()
+        };
+        let u = ellipse.pixel_union(100, 100).unwrap();
+        let m = ellipse.recording_mask(u).unwrap();
+        assert_eq!(m.len(), 400);
+        assert_eq!(m[10 * 20 + 10], 255);
+        assert_eq!(m[0], 0);
+    }
+
+    #[test]
+    fn union_is_clamped_to_the_frame() {
+        let s = SelectionSet {
+            active: Some(Selection::new(
+                ShapeKind::Rectangle,
+                Rect::from_ltrb(-5.0, 90.0, 20.0, 130.0),
+            )),
+            ..Default::default()
+        };
+        assert_eq!(
+            s.pixel_union(100, 100),
+            Some(IRect::from_ltrb(0, 90, 20, 100))
+        );
     }
 }
 
@@ -320,8 +453,14 @@ mod tests {
 
     #[test]
     fn anchor_rect_handles_every_quadrant() {
-        assert_eq!(rect_from_anchor(Point::new(10.0, 10.0), Point::new(4.0, 30.0), None), r(4.0, 10.0, 10.0, 30.0));
-        assert_eq!(rect_from_anchor(Point::new(10.0, 10.0), Point::new(20.0, 2.0), None), r(10.0, 2.0, 20.0, 10.0));
+        assert_eq!(
+            rect_from_anchor(Point::new(10.0, 10.0), Point::new(4.0, 30.0), None),
+            r(4.0, 10.0, 10.0, 30.0)
+        );
+        assert_eq!(
+            rect_from_anchor(Point::new(10.0, 10.0), Point::new(20.0, 2.0), None),
+            r(10.0, 2.0, 20.0, 10.0)
+        );
     }
 
     #[test]
@@ -335,22 +474,40 @@ mod tests {
     #[test]
     fn corner_resize_pins_the_opposite_corner() {
         let base = r(10.0, 10.0, 50.0, 40.0);
-        assert_eq!(resize_rect(Handle::TopLeft, base, Point::new(0.0, 0.0), None), r(0.0, 0.0, 50.0, 40.0));
-        assert_eq!(resize_rect(Handle::BottomRight, base, Point::new(60.0, 70.0), None), r(10.0, 10.0, 60.0, 70.0));
+        assert_eq!(
+            resize_rect(Handle::TopLeft, base, Point::new(0.0, 0.0), None),
+            r(0.0, 0.0, 50.0, 40.0)
+        );
+        assert_eq!(
+            resize_rect(Handle::BottomRight, base, Point::new(60.0, 70.0), None),
+            r(10.0, 10.0, 60.0, 70.0)
+        );
     }
 
     #[test]
     fn edge_resize_moves_one_side_and_can_flip() {
         let base = r(10.0, 10.0, 50.0, 40.0);
-        assert_eq!(resize_rect(Handle::Right, base, Point::new(70.0, 999.0), None), r(10.0, 10.0, 70.0, 40.0));
-        assert_eq!(resize_rect(Handle::Left, base, Point::new(60.0, 0.0), None), r(50.0, 10.0, 60.0, 40.0));
+        assert_eq!(
+            resize_rect(Handle::Right, base, Point::new(70.0, 999.0), None),
+            r(10.0, 10.0, 70.0, 40.0)
+        );
+        assert_eq!(
+            resize_rect(Handle::Left, base, Point::new(60.0, 0.0), None),
+            r(50.0, 10.0, 60.0, 40.0)
+        );
     }
 
     #[test]
     fn handles_hit_within_tolerance() {
         let s = r(100.0, 100.0, 200.0, 160.0);
-        assert_eq!(hit_test_handle(Point::new(103.0, 98.0), s, 7.5), Some(Handle::TopLeft));
-        assert_eq!(hit_test_handle(Point::new(150.0, 161.0), s, 7.5), Some(Handle::Bottom));
+        assert_eq!(
+            hit_test_handle(Point::new(103.0, 98.0), s, 7.5),
+            Some(Handle::TopLeft)
+        );
+        assert_eq!(
+            hit_test_handle(Point::new(150.0, 161.0), s, 7.5),
+            Some(Handle::Bottom)
+        );
         assert_eq!(hit_test_handle(Point::new(150.0, 130.0), s, 7.5), None);
     }
 
@@ -362,14 +519,24 @@ mod tests {
         assert!(!is_on_edge(s, Point::new(150.0, 150.0), 8.0));
         assert!(!is_on_edge(s, Point::new(80.0, 150.0), 8.0));
         // Too small for an interior: all of it is edge.
-        assert!(is_on_edge(r(0.0, 0.0, 10.0, 10.0), Point::new(5.0, 5.0), 8.0));
+        assert!(is_on_edge(
+            r(0.0, 0.0, 10.0, 10.0),
+            Point::new(5.0, 5.0),
+            8.0
+        ));
     }
 
     #[test]
     fn moves_and_rects_stay_inside_the_frame() {
         let area = r(0.0, 0.0, 100.0, 100.0);
-        assert_eq!(clamp_move(r(10.0, 10.0, 40.0, 40.0), 200.0, -50.0, area), r(70.0, 0.0, 100.0, 30.0));
-        assert_eq!(clamp_rect(r(-10.0, 50.0, 150.0, 60.0), area), r(0.0, 50.0, 100.0, 60.0));
+        assert_eq!(
+            clamp_move(r(10.0, 10.0, 40.0, 40.0), 200.0, -50.0, area),
+            r(70.0, 0.0, 100.0, 30.0)
+        );
+        assert_eq!(
+            clamp_rect(r(-10.0, 50.0, 150.0, 60.0), area),
+            r(0.0, 50.0, 100.0, 60.0)
+        );
     }
 
     #[test]
@@ -386,7 +553,11 @@ mod tests {
 
     #[test]
     fn freeform_points_remap_with_the_box() {
-        let pts = [Point::new(10.0, 10.0), Point::new(30.0, 10.0), Point::new(20.0, 30.0)];
+        let pts = [
+            Point::new(10.0, 10.0),
+            Point::new(30.0, 10.0),
+            Point::new(20.0, 30.0),
+        ];
         let mut s = Selection::from_points(ShapeKind::Polygon, &pts);
         assert_eq!(s.bounds, r(10.0, 10.0, 30.0, 30.0));
         s.bounds = r(0.0, 0.0, 40.0, 40.0);
@@ -397,7 +568,10 @@ mod tests {
     #[test]
     fn set_union_and_commit() {
         let mut set = SelectionSet {
-            active: Some(Selection::new(ShapeKind::Rectangle, r(0.0, 0.0, 10.0, 10.0))),
+            active: Some(Selection::new(
+                ShapeKind::Rectangle,
+                r(0.0, 0.0, 10.0, 10.0),
+            )),
             ..Default::default()
         };
         set.commit_active(true);

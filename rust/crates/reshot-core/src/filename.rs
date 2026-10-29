@@ -11,7 +11,11 @@ pub fn now() -> NaiveDateTime {
 pub const DEFAULT_TEMPLATE: &str = "Reshot_{date}_{time}";
 
 pub fn build(template: &str, extension: &str, now: NaiveDateTime) -> String {
-    let template = if template.trim().is_empty() { DEFAULT_TEMPLATE } else { template };
+    let template = if template.trim().is_empty() {
+        DEFAULT_TEMPLATE
+    } else {
+        template
+    };
     let name = template
         .replace("{date}", &now.format("%Y-%m-%d").to_string())
         .replace("{time}", &now.format("%H-%M-%S").to_string());
@@ -25,12 +29,18 @@ mod tests {
     use chrono::NaiveDate;
 
     fn at() -> NaiveDateTime {
-        NaiveDate::from_ymd_opt(2026, 7, 28).unwrap().and_hms_opt(9, 5, 3).unwrap()
+        NaiveDate::from_ymd_opt(2026, 7, 28)
+            .unwrap()
+            .and_hms_opt(9, 5, 3)
+            .unwrap()
     }
 
     #[test]
     fn expands_placeholders() {
-        assert_eq!(build("Reshot_{date}_{time}", ".PNG", at()), "Reshot_2026-07-28_09-05-03.png");
+        assert_eq!(
+            build("Reshot_{date}_{time}", ".PNG", at()),
+            "Reshot_2026-07-28_09-05-03.png"
+        );
     }
 
     #[test]

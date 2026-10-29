@@ -3,7 +3,8 @@
 //! clipboard as well as on disk.
 
 use skia_safe::{
-    AlphaType, Bitmap, ColorType, EncodedImageFormat, IRect, ImageInfo, Matrix, Path, images, jpeg_encoder, png_encoder,
+    AlphaType, Bitmap, ColorType, EncodedImageFormat, IRect, ImageInfo, Matrix, Path, images,
+    jpeg_encoder, png_encoder,
 };
 
 use crate::document::{self, CaptureDocument};
@@ -52,7 +53,11 @@ impl Raster {
         for y in 0..h as usize {
             bgra.extend_from_slice(&src[y * rb..y * rb + row]);
         }
-        Self { width: w, height: h, bgra }
+        Self {
+            width: w,
+            height: h,
+            bgra,
+        }
     }
 
     pub fn to_bitmap(&self) -> Bitmap {
@@ -74,7 +79,12 @@ pub fn bitmap_from_bgra(width: i32, height: i32, stride: usize, bgra: &[u8]) -> 
 
 /// Crops `region` out of base + document, keeping only what lies inside `shape` (given in
 /// frame coordinates); everything else is transparent. `shape = None` keeps the whole rect.
-pub fn crop_masked(base: &Bitmap, doc: &CaptureDocument, region: IRect, shape: Option<&Path>) -> Bitmap {
+pub fn crop_masked(
+    base: &Bitmap,
+    doc: &CaptureDocument,
+    region: IRect,
+    shape: Option<&Path>,
+) -> Bitmap {
     let composite = doc.render_composite(base);
     let mut out = document::new_bitmap(region.width().max(1), region.height().max(1));
     document::with_canvas(&mut out, |c| {
@@ -94,10 +104,17 @@ pub fn encode(bitmap: &Bitmap, format: ImageFormat, quality: i32) -> Option<Vec<
     let pixmap = bitmap.pixmap();
     let mut data = Vec::new();
     let ok = match format {
-        ImageFormat::Png => png_encoder::encode(pixmap, &mut data, &png_encoder::Options::default()),
-        ImageFormat::Jpg => {
-            jpeg_encoder::encode(pixmap, &mut data, &jpeg_encoder::Options { quality, ..Default::default() })
+        ImageFormat::Png => {
+            png_encoder::encode(pixmap, &mut data, &png_encoder::Options::default())
         }
+        ImageFormat::Jpg => jpeg_encoder::encode(
+            pixmap,
+            &mut data,
+            &jpeg_encoder::Options {
+                quality,
+                ..Default::default()
+            },
+        ),
         // The prebuilt Skia ships without its WebP encoder, so libwebp does it: lossy at the
         // configured quality, alpha kept, as the C# build produced.
         ImageFormat::Webp => {
@@ -105,8 +122,9 @@ pub fn encode(bitmap: &Bitmap, format: ImageFormat, quality: i32) -> Option<Vec<
             for px in rgba.chunks_exact_mut(4) {
                 px.swap(0, 2);
             }
-            let encoded = webp::Encoder::from_rgba(&rgba, bitmap.width() as u32, bitmap.height() as u32)
-                .encode(quality as f32);
+            let encoded =
+                webp::Encoder::from_rgba(&rgba, bitmap.width() as u32, bitmap.height() as u32)
+                    .encode(quality as f32);
             data.extend_from_slice(&encoded);
             true
         }
@@ -116,10 +134,21 @@ pub fn encode(bitmap: &Bitmap, format: ImageFormat, quality: i32) -> Option<Vec<
 
 /// Unpremultiplied tight BGRA copy, for consumers that do not understand premultiplied alpha.
 pub fn to_unpremul_bgra(bitmap: &Bitmap) -> Vec<u8> {
-    let info = ImageInfo::new(bitmap.dimensions(), ColorType::BGRA8888, AlphaType::Unpremul, None);
+    let info = ImageInfo::new(
+        bitmap.dimensions(),
+        ColorType::BGRA8888,
+        AlphaType::Unpremul,
+        None,
+    );
     let mut out = vec![0u8; bitmap.width() as usize * bitmap.height() as usize * 4];
     let image = images::raster_from_bitmap(bitmap).expect("bitmap has pixels");
-    image.read_pixels(&info, &mut out, info.min_row_bytes(), (0, 0), skia_safe::image::CachingHint::Allow);
+    image.read_pixels(
+        &info,
+        &mut out,
+        info.min_row_bytes(),
+        (0, 0),
+        skia_safe::image::CachingHint::Allow,
+    );
     out
 }
 

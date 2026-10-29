@@ -101,7 +101,9 @@ fn build() -> Vec<FontEntry> {
     // for every user.
     names.sort_by_key(|n| n.to_lowercase());
     // The default leads the dropdown so it opens on the familiar choice.
-    if let Some(i) = names.iter().position(|n| n.eq_ignore_ascii_case(DEFAULT_FAMILY))
+    if let Some(i) = names
+        .iter()
+        .position(|n| n.eq_ignore_ascii_case(DEFAULT_FAMILY))
         && i > 0
     {
         let preferred = names.remove(i);
@@ -114,7 +116,10 @@ fn build() -> Vec<FontEntry> {
         .into_iter()
         .map(|family| {
             let supports_cyrillic = has_cyrillic(&family);
-            FontEntry { family, supports_cyrillic }
+            FontEntry {
+                family,
+                supports_cyrillic,
+            }
         })
         .collect()
 }
@@ -123,7 +128,8 @@ fn has_cyrillic(family: &str) -> bool {
     // Goes through `cached`, not `resolve`, and shares its cache, so each font file is opened
     // once rather than once per probe.
     let tf = cached(family);
-    tf.unichar_to_glyph(CYRILLIC_CAPITAL_A as i32) != 0 && tf.unichar_to_glyph(CYRILLIC_SMALL_YA as i32) != 0
+    tf.unichar_to_glyph(CYRILLIC_CAPITAL_A as i32) != 0
+        && tf.unichar_to_glyph(CYRILLIC_SMALL_YA as i32) != 0
 }
 
 #[cfg(test)]
@@ -153,7 +159,10 @@ mod tests {
     #[test]
     fn unknown_and_blank_resolve_to_the_default() {
         let d = resolve(DEFAULT_FAMILY);
-        assert_eq!(resolve("NoSuchFontFamily_ZZZ").family_name(), d.family_name());
+        assert_eq!(
+            resolve("NoSuchFontFamily_ZZZ").family_name(),
+            d.family_name()
+        );
         assert_eq!(resolve("   ").family_name(), d.family_name());
     }
 

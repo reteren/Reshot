@@ -9,8 +9,8 @@
 //! Filter Eraser return the original pixels. Everything is in physical pixels.
 
 use skia_safe::{
-    AlphaType, BlendMode, Bitmap, Canvas, Color, ColorFilter, ColorType, IRect, ImageInfo, Paint, Path,
-    color_filters,
+    AlphaType, Bitmap, BlendMode, Canvas, Color, ColorFilter, ColorType, IRect, ImageInfo, Paint,
+    Path, color_filters,
 };
 
 use crate::tools::VectorObject;
@@ -36,8 +36,16 @@ pub struct CaptureDocument {
 /// A frame-sized premultiplied BGRA bitmap, cleared to transparent.
 pub fn new_bitmap(width: i32, height: i32) -> Bitmap {
     let mut b = Bitmap::new();
-    let info = ImageInfo::new((width.max(1), height.max(1)), ColorType::BGRA8888, AlphaType::Premul, None);
-    assert!(b.set_info(&info, None), "invalid bitmap size {width}x{height}");
+    let info = ImageInfo::new(
+        (width.max(1), height.max(1)),
+        ColorType::BGRA8888,
+        AlphaType::Premul,
+        None,
+    );
+    assert!(
+        b.set_info(&info, None),
+        "invalid bitmap size {width}x{height}"
+    );
     b.alloc_pixels();
     b.erase_color(Color::TRANSPARENT);
     b
@@ -177,18 +185,50 @@ impl CaptureDocument {
     // removes exactly that fraction of the layer with no compounding along the stroke.
 
     /// Eraser: removes painted pixels by the coverage strength.
-    pub fn erase_paint_coverage(&mut self, coverage: &Bitmap, dx: i32, dy: i32, selection: Option<&Path>) {
+    pub fn erase_paint_coverage(
+        &mut self,
+        coverage: &Bitmap,
+        dx: i32,
+        dy: i32,
+        selection: Option<&Path>,
+    ) {
         self.apply_coverage(Layer::Paint, coverage, dx, dy, selection, BlendMode::DstOut);
     }
 
     /// Filter Eraser: removes effect pixels by the coverage strength.
-    pub fn erase_effects_coverage(&mut self, coverage: &Bitmap, dx: i32, dy: i32, selection: Option<&Path>) {
-        self.apply_coverage(Layer::Effects, coverage, dx, dy, selection, BlendMode::DstOut);
+    pub fn erase_effects_coverage(
+        &mut self,
+        coverage: &Bitmap,
+        dx: i32,
+        dy: i32,
+        selection: Option<&Path>,
+    ) {
+        self.apply_coverage(
+            Layer::Effects,
+            coverage,
+            dx,
+            dy,
+            selection,
+            BlendMode::DstOut,
+        );
     }
 
     /// Absolute Eraser: accumulates coverage into the punch-through mask.
-    pub fn absolute_erase_coverage(&mut self, coverage: &Bitmap, dx: i32, dy: i32, selection: Option<&Path>) {
-        self.apply_coverage(Layer::Absolute, coverage, dx, dy, selection, BlendMode::SrcOver);
+    pub fn absolute_erase_coverage(
+        &mut self,
+        coverage: &Bitmap,
+        dx: i32,
+        dy: i32,
+        selection: Option<&Path>,
+    ) {
+        self.apply_coverage(
+            Layer::Absolute,
+            coverage,
+            dx,
+            dy,
+            selection,
+            BlendMode::SrcOver,
+        );
         self.has_absolute = true;
     }
 
@@ -305,9 +345,19 @@ pub fn snapshot_region(layer: &Bitmap, region: IRect) -> Bitmap {
 
 /// Overwrites a region of a layer with a snapshot taken by [`snapshot_region`].
 pub fn restore_region(layer: &mut Bitmap, region: IRect, snapshot: &Bitmap) {
-    let Some(clipped) = clip_region(layer, region) else { return };
-    let sx = if snapshot.width() == region.width() { clipped.left - region.left } else { 0 };
-    let sy = if snapshot.height() == region.height() { clipped.top - region.top } else { 0 };
+    let Some(clipped) = clip_region(layer, region) else {
+        return;
+    };
+    let sx = if snapshot.width() == region.width() {
+        clipped.left - region.left
+    } else {
+        0
+    };
+    let sy = if snapshot.height() == region.height() {
+        clipped.top - region.top
+    } else {
+        0
+    };
     let w = clipped.width().min(snapshot.width() - sx);
     let h = clipped.height().min(snapshot.height() - sy);
     if w <= 0 || h <= 0 {
@@ -370,7 +420,11 @@ mod tests {
         let mut d = CaptureDocument::new(20, 20);
         let mut red = Paint::default();
         red.set_color(Color::RED);
-        d.commit_stroke(&rect_path(0.0, 0.0, 20.0, 20.0), &red, Some(&rect_path(5.0, 5.0, 10.0, 10.0)));
+        d.commit_stroke(
+            &rect_path(0.0, 0.0, 20.0, 20.0),
+            &red,
+            Some(&rect_path(5.0, 5.0, 10.0, 10.0)),
+        );
         let p = d.layer(Layer::Paint).unwrap();
         assert_eq!(px(p, 7, 7)[3], 255);
         assert_eq!(px(p, 15, 15)[3], 0);

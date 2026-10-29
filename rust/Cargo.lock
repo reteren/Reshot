@@ -4456,6 +4456,8 @@ dependencies = [
  "reshot-capture",
  "reshot-core",
  "reshot-platform",
+ "reshot-recording",
+ "rust-embed",
  "smallvec",
  "windows 0.61.3",
  "winresource",

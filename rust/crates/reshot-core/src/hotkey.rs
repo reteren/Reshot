@@ -50,7 +50,11 @@ impl HotkeyDefinition {
         if text.trim().is_empty() {
             return Err("Hotkey string is empty.".into());
         }
-        let tokens: Vec<&str> = text.split('+').map(str::trim).filter(|t| !t.is_empty()).collect();
+        let tokens: Vec<&str> = text
+            .split('+')
+            .map(str::trim)
+            .filter(|t| !t.is_empty())
+            .collect();
         if tokens.is_empty() {
             return Err("Hotkey string has no keys.".into());
         }
@@ -68,7 +72,11 @@ impl HotkeyDefinition {
         let main = main.ok_or_else(|| format!("Hotkey '{text}' has modifiers but no main key."))?;
         let (virtual_key, key_name) =
             map_key(main).ok_or_else(|| format!("Unknown key '{main}' in '{text}'."))?;
-        Ok(Self { modifiers: modifiers | HotkeyModifiers::NO_REPEAT, virtual_key, key_name })
+        Ok(Self {
+            modifiers: modifiers | HotkeyModifiers::NO_REPEAT,
+            virtual_key,
+            key_name,
+        })
     }
 }
 
@@ -188,13 +196,21 @@ mod tests {
 
     #[test]
     fn display_roundtrips_to_canonical_form() {
-        assert_eq!(HotkeyDefinition::parse("shift+ctrl+prtscn").unwrap().to_string(), "Ctrl+Shift+PrtScn");
+        assert_eq!(
+            HotkeyDefinition::parse("shift+ctrl+prtscn")
+                .unwrap()
+                .to_string(),
+            "Ctrl+Shift+PrtScn"
+        );
     }
 
     #[test]
     fn rejects_invalid_input() {
         for input in ["", "   ", "Ctrl", "Ctrl+A+B", "Ctrl+Nope"] {
-            assert!(!HotkeyDefinition::parse(input).unwrap_err().is_empty(), "{input:?}");
+            assert!(
+                !HotkeyDefinition::parse(input).unwrap_err().is_empty(),
+                "{input:?}"
+            );
         }
     }
 }

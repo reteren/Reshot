@@ -6,8 +6,8 @@ use std::collections::HashMap;
 
 use skia_safe::gradient::{Colors, Gradient, Interpolation, shaders};
 use skia_safe::{
-    BlendMode, Bitmap, Color, Color4f, FilterMode, IRect, MipmapMode, Paint, PaintCap, PaintJoin, PaintStyle, Path,
-    PathBuilder, Point, Rect, SamplingOptions, TileMode, image_filters,
+    Bitmap, BlendMode, Color, Color4f, FilterMode, IRect, MipmapMode, Paint, PaintCap, PaintJoin,
+    PaintStyle, Path, PathBuilder, Point, Rect, SamplingOptions, TileMode, image_filters,
 };
 
 use crate::document::{self, CaptureDocument, Layer};
@@ -34,11 +34,17 @@ pub enum DrawTool {
 impl DrawTool {
     /// Region tools paint an area (brushed or Ctrl-rect) rather than ink.
     pub fn is_region(self) -> bool {
-        matches!(self, Self::Blur | Self::Pixelize | Self::Eraser | Self::AbsoluteEraser | Self::FilterEraser)
+        matches!(
+            self,
+            Self::Blur | Self::Pixelize | Self::Eraser | Self::AbsoluteEraser | Self::FilterEraser
+        )
     }
 
     pub fn is_eraser(self) -> bool {
-        matches!(self, Self::Eraser | Self::AbsoluteEraser | Self::FilterEraser)
+        matches!(
+            self,
+            Self::Eraser | Self::AbsoluteEraser | Self::FilterEraser
+        )
     }
 
     pub fn is_effect(self) -> bool {
@@ -46,7 +52,10 @@ impl DrawTool {
     }
 
     pub fn is_shape(self) -> bool {
-        matches!(self, Self::Line | Self::Arrow | Self::Square | Self::Circle | Self::Triangle)
+        matches!(
+            self,
+            Self::Line | Self::Arrow | Self::Square | Self::Circle | Self::Triangle
+        )
     }
 
     /// Ink tools have a colour; erasers and effects do not.
@@ -94,15 +103,41 @@ pub enum ToolKey {
 /// `opacity`.
 pub fn default_tool_settings() -> HashMap<ToolKey, BrushSettings> {
     let red = Color::from_rgb(0xFF, 0x3B, 0x30);
-    let ink = |t: f32| BrushSettings { thickness: t, opacity: 1.0, color: red, ..Default::default() };
+    let ink = |t: f32| BrushSettings {
+        thickness: t,
+        opacity: 1.0,
+        color: red,
+        ..Default::default()
+    };
     HashMap::from([
         (ToolKey::Brush, ink(5.0)),
         (ToolKey::Shapes, ink(5.0)),
         (ToolKey::Lines, ink(5.0)),
         (ToolKey::Text, ink(5.0)),
-        (ToolKey::Eraser, BrushSettings { thickness: 25.0, opacity: 1.0, ..Default::default() }),
-        (ToolKey::Pixelize, BrushSettings { thickness: 30.0, opacity: 0.15, ..Default::default() }),
-        (ToolKey::Blur, BrushSettings { thickness: 30.0, opacity: 0.50, ..Default::default() }),
+        (
+            ToolKey::Eraser,
+            BrushSettings {
+                thickness: 25.0,
+                opacity: 1.0,
+                ..Default::default()
+            },
+        ),
+        (
+            ToolKey::Pixelize,
+            BrushSettings {
+                thickness: 30.0,
+                opacity: 0.15,
+                ..Default::default()
+            },
+        ),
+        (
+            ToolKey::Blur,
+            BrushSettings {
+                thickness: 30.0,
+                opacity: 0.50,
+                ..Default::default()
+            },
+        ),
     ])
 }
 
@@ -188,7 +223,9 @@ impl Editor {
     }
 
     pub fn settings_mut(&mut self, tool: DrawTool) -> &mut BrushSettings {
-        self.tool_settings.get_mut(&tool.settings_key()).expect("every key has defaults")
+        self.tool_settings
+            .get_mut(&tool.settings_key())
+            .expect("every key has defaults")
     }
 
     fn touched(&mut self, region: IRect) {
@@ -219,7 +256,12 @@ impl Editor {
         (r.width() > 0 && r.height() > 0).then_some(r)
     }
 
-    fn apply_region_op(&mut self, layer: Layer, region: IRect, op: impl FnOnce(&mut CaptureDocument)) {
+    fn apply_region_op(
+        &mut self,
+        layer: Layer,
+        region: IRect,
+        op: impl FnOnce(&mut CaptureDocument),
+    ) {
         let cmd = LayerRegionCommand::record(&mut self.doc, layer, region, op);
         self.history.push(cmd);
         self.touched(region);
@@ -262,7 +304,12 @@ impl Editor {
         }
         if let Some(r) = &mut self.region {
             if r.rect_mode {
-                r.rect = Rect::from_ltrb(r.start.x.min(p.x), r.start.y.min(p.y), r.start.x.max(p.x), r.start.y.max(p.y));
+                r.rect = Rect::from_ltrb(
+                    r.start.x.min(p.x),
+                    r.start.y.min(p.y),
+                    r.start.x.max(p.x),
+                    r.start.y.max(p.y),
+                );
             } else {
                 r.path.line_to(p);
             }
@@ -271,23 +318,33 @@ impl Editor {
 
     /// The live brush stroke and its paint, for the preview.
     pub fn brush_preview(&self) -> Option<(Path, Paint, Option<&Path>)> {
-        self.brush.as_ref().map(|b| (b.stroke.path(), b.stroke.paint(), b.clip.as_ref()))
+        self.brush
+            .as_ref()
+            .map(|b| (b.stroke.path(), b.stroke.paint(), b.clip.as_ref()))
     }
 
     fn end_brush(&mut self) {
-        let Some(BrushGesture { stroke, clip }) = self.brush.take() else { return };
+        let Some(BrushGesture { stroke, clip }) = self.brush.take() else {
+            return;
+        };
         if stroke.is_empty() {
             return;
         }
         let path = stroke.path();
         let pad = stroke.settings.thickness / 2.0 + 2.0;
         let b = path.bounds();
-        let Some(region) = self.to_region(Rect::from_ltrb(b.left - pad, b.top - pad, b.right + pad, b.bottom + pad))
-        else {
+        let Some(region) = self.to_region(Rect::from_ltrb(
+            b.left - pad,
+            b.top - pad,
+            b.right + pad,
+            b.bottom + pad,
+        )) else {
             return;
         };
         let paint = stroke.paint();
-        self.apply_region_op(Layer::Paint, region, |d| d.commit_stroke(&path, &paint, clip.as_ref()));
+        self.apply_region_op(Layer::Paint, region, |d| {
+            d.commit_stroke(&path, &paint, clip.as_ref())
+        });
     }
 
     // ---- Shapes and text ---------------------------------------------------------------
@@ -312,7 +369,9 @@ impl Editor {
     }
 
     fn end_shape(&mut self) {
-        let Some((v, _)) = self.shape.take() else { return };
+        let Some((v, _)) = self.shape.take() else {
+            return;
+        };
         let clip = self.shape_clip.take();
         let b = v.compute_bounds();
         if b.width() >= 3.0 || b.height() >= 3.0 {
@@ -326,8 +385,12 @@ impl Editor {
         // 44 px covers the largest arrowhead barb (clamped to 40) plus anti-aliasing.
         let pad = v.thickness / 2.0 + 44.0;
         let b = v.compute_bounds();
-        let Some(region) = self.to_region(Rect::from_ltrb(b.left - pad, b.top - pad, b.right + pad, b.bottom + pad))
-        else {
+        let Some(region) = self.to_region(Rect::from_ltrb(
+            b.left - pad,
+            b.top - pad,
+            b.right + pad,
+            b.bottom + pad,
+        )) else {
             return;
         };
         self.apply_region_op(Layer::Paint, region, |d| d.commit_vector(v, clip));
@@ -460,7 +523,11 @@ impl Editor {
         }
         // Higher strength → bigger sigma.
         let sigma = (strength * 10.9375).max(1.0);
-        if self.blur_cache.as_ref().is_none_or(|(s, _)| (s - sigma).abs() > 0.01) {
+        if self
+            .blur_cache
+            .as_ref()
+            .is_none_or(|(s, _)| (s - sigma).abs() > 0.01)
+        {
             let mut out = document::new_bitmap(w, h);
             let image = self.base.as_image();
             document::with_canvas(&mut out, |c| {
@@ -476,12 +543,16 @@ impl Editor {
     fn end_region(&mut self) {
         let Some(r) = self.region.take() else { return };
         let area = self.region_area(&r);
-        let Some(region) = self.to_region(*area.bounds()) else { return };
+        let Some(region) = self.to_region(*area.bounds()) else {
+            return;
+        };
         let clip = r.clip.clone();
         match r.tool {
             DrawTool::Blur | DrawTool::Pixelize => {
                 let src = self.effect_source(r.tool).clone();
-                self.apply_region_op(Layer::Effects, region, |d| d.apply_effect(&src, &area, clip.as_ref()));
+                self.apply_region_op(Layer::Effects, region, |d| {
+                    d.apply_effect(&src, &area, clip.as_ref())
+                });
             }
             // A no-op erase must not materialise an untouched layer.
             DrawTool::FilterEraser if self.doc.has_effects => {
@@ -535,10 +606,15 @@ impl Editor {
             }
             let radius = s.thickness.max(10.0) / 2.0;
             let rim = rim as f32 / 255.0;
-            let stops = [Color4f::new(1.0, 1.0, 1.0, 1.0), Color4f::new(rim, rim, rim, 1.0)];
+            let stops = [
+                Color4f::new(1.0, 1.0, 1.0, 1.0),
+                Color4f::new(rim, rim, rim, 1.0),
+            ];
             let positions = [0.0f32, 1.0];
-            let gradient =
-                Gradient::new(Colors::new(&stops, Some(&positions), TileMode::Clamp, None), Interpolation::default());
+            let gradient = Gradient::new(
+                Colors::new(&stops, Some(&positions), TileMode::Clamp, None),
+                Interpolation::default(),
+            );
             let mut paint = Paint::default();
             paint.set_anti_alias(true);
             paint.set_blend_mode(BlendMode::Lighten);
@@ -548,6 +624,162 @@ impl Editor {
             }
         });
         cov
+    }
+
+    // ---- Painting the overlay ---------------------------------------------------------------
+
+    /// Frame area the live gesture currently affects (stroke, shape, region, text), padded for
+    /// stroke width and anti-aliasing. The view repaints the union of this before and after a
+    /// change.
+    pub fn live_bounds(&self) -> Option<IRect> {
+        let mut out: Option<Rect> = None;
+        let mut add = |r: Rect, pad: f32| {
+            let r = Rect::from_ltrb(r.left - pad, r.top - pad, r.right + pad, r.bottom + pad);
+            out = Some(match out {
+                Some(o) => Rect::join2(o, r),
+                None => r,
+            });
+        };
+        if let Some(b) = &self.brush {
+            add(
+                *b.stroke.path().bounds(),
+                b.stroke.settings.thickness / 2.0 + 2.0,
+            );
+        }
+        if let Some((v, _)) = &self.shape {
+            add(v.compute_bounds(), v.thickness / 2.0 + 44.0);
+        }
+        if let Some(r) = &self.region {
+            add(*self.region_area(r).bounds(), 2.0);
+        }
+        if let Some(t) = &self.text {
+            // The caret sits past the end of the last line, a font size tall.
+            add(t.compute_bounds(), t.font_size);
+        }
+        out.and_then(|r| self.to_region(r))
+    }
+
+    /// Paints everything the overlay shows above the dimmed frame: committed effects and
+    /// paint, the live gesture's preview, the text being typed with its caret, and the
+    /// checkerboard over absolute-erased areas. `canvas` is in frame coordinates; the caller
+    /// clips it to the part it is repainting.
+    pub fn paint(&mut self, canvas: &skia_safe::Canvas) {
+        let live_region = self
+            .region
+            .as_ref()
+            .map(|r| (r.tool, self.region_area(r), r.clip.clone()));
+        // Built once here, not per layer: the soft coverage of the live eraser.
+        let live_cov = self.region.as_ref().and_then(|r| {
+            if !r.tool.is_eraser() {
+                return None;
+            }
+            let reg = self.to_region(*self.region_area(r).bounds())?;
+            Some((reg, self.erase_coverage(r, reg)))
+        });
+        let live_fx = match &live_region {
+            Some((tool, _, _)) if tool.is_effect() => Some(self.effect_source(*tool).clone()),
+            _ => None,
+        };
+        let tool = live_region.as_ref().map(|(t, _, _)| *t);
+        let clip = live_region.as_ref().and_then(|(_, _, c)| c.clone());
+
+        // A live soft eraser removes its layer's pixels inside an isolated layer, so only that
+        // layer fades and the preview matches what the commit will produce.
+        let draw_layer = |layer: &Bitmap, erasing: bool| match (&live_cov, erasing) {
+            (Some((reg, cov)), true) => {
+                canvas.save_layer(&skia_safe::canvas::SaveLayerRec::default());
+                canvas.draw_image(layer.as_image(), (0, 0), None);
+                canvas.save();
+                if let Some(c) = &clip {
+                    canvas.clip_path(c, None, true);
+                }
+                let mut p = Paint::default();
+                p.set_blend_mode(BlendMode::DstOut);
+                p.set_color_filter(document::coverage_alpha_filter());
+                canvas.draw_image(cov.as_image(), (reg.left, reg.top), Some(&p));
+                canvas.restore();
+                canvas.restore();
+            }
+            _ => {
+                canvas.draw_image(layer.as_image(), (0, 0), None);
+            }
+        };
+
+        if self.doc.has_effects
+            && let Some(fx) = self.doc.layer(Layer::Effects)
+        {
+            draw_layer(fx, tool == Some(DrawTool::FilterEraser));
+        }
+
+        // Blur and pixelize preview the source under the brushed area, below the paint.
+        if let (Some(src), Some((_, area, _))) = (&live_fx, &live_region) {
+            canvas.save();
+            if let Some(c) = &clip {
+                canvas.clip_path(c, None, true);
+            }
+            canvas.clip_path(area, None, true);
+            canvas.draw_image(src.as_image(), (0, 0), None);
+            canvas.restore();
+        }
+
+        if self.doc.has_paint
+            && let Some(paint) = self.doc.layer(Layer::Paint)
+        {
+            draw_layer(paint, tool == Some(DrawTool::Eraser));
+        }
+
+        if let Some((path, paint, clip)) = self.brush_preview() {
+            canvas.save();
+            if let Some(c) = clip {
+                canvas.clip_path(c, None, true);
+            }
+            canvas.draw_path(&path, &paint);
+            canvas.restore();
+        }
+        if let Some(v) = self.shape_preview() {
+            v.draw(canvas);
+        }
+        if let Some(t) = &self.text {
+            t.draw(canvas);
+            draw_caret(canvas, t);
+        }
+
+        // Absolute-erased areas show a transparency checkerboard: those pixels become
+        // transparent on export, and this is the on-screen cue for it.
+        if self.doc.has_absolute
+            && let (Some(bounds), Some(mask)) =
+                (self.absolute_bounds, self.doc.layer(Layer::Absolute))
+        {
+            canvas.save_layer(&skia_safe::canvas::SaveLayerRec::default().bounds(&bounds));
+            let mut checker = Paint::default();
+            checker.set_shader(checker_shader());
+            canvas.draw_rect(bounds, &checker);
+            let mut keep = Paint::default();
+            keep.set_blend_mode(BlendMode::DstIn);
+            canvas.draw_image(mask.as_image(), (0, 0), Some(&keep));
+            canvas.restore();
+        }
+
+        // The Absolute Eraser previews as a red tint whose strength follows the coverage.
+        if tool == Some(DrawTool::AbsoluteEraser)
+            && let Some((reg, cov)) = &live_cov
+        {
+            let r = Rect::from_irect(*reg);
+            canvas.save();
+            if let Some(c) = &clip {
+                canvas.clip_path(c, None, true);
+            }
+            canvas.save_layer(&skia_safe::canvas::SaveLayerRec::default().bounds(&r));
+            let mut red = Paint::default();
+            red.set_color(Color::from_argb(0xB0, 0xFF, 0x2D, 0x55));
+            canvas.draw_rect(r, &red);
+            let mut keep = Paint::default();
+            keep.set_blend_mode(BlendMode::DstIn);
+            keep.set_color_filter(document::coverage_alpha_filter());
+            canvas.draw_image(cov.as_image(), (reg.left, reg.top), Some(&keep));
+            canvas.restore();
+            canvas.restore();
+        }
     }
 
     // ---- Gesture plumbing -------------------------------------------------------------------
@@ -586,11 +818,53 @@ impl Editor {
     }
 }
 
+/// A caret at the end of the text being typed, measured with the same typeface the glyphs
+/// are drawn with so it does not drift off the line for other families.
+fn draw_caret(canvas: &skia_safe::Canvas, t: &VectorObject) {
+    let font = skia_safe::Font::from_typeface(crate::fonts::resolve(&t.font_family), t.font_size);
+    let lines: Vec<&str> = t.text.split('\n').collect();
+    let last = lines.last().copied().unwrap_or("");
+    let (spacing, _) = font.metrics();
+    let x = t.p1.x + font.measure_str(last, None).0;
+    let y = t.p1.y + (lines.len() - 1) as f32 * spacing;
+    let mut p = Paint::default();
+    p.set_color(t.color);
+    p.set_stroke_width((t.font_size / 16.0).max(1.5));
+    p.set_anti_alias(true);
+    canvas.draw_line((x + 1.0, y), (x + 1.0, y + t.font_size), &p);
+}
+
+/// A repeating grey checkerboard: the "transparent" indicator.
+fn checker_shader() -> Option<skia_safe::Shader> {
+    const CELL: i32 = 8;
+    let mut tile = document::new_bitmap(CELL * 2, CELL * 2);
+    tile.erase_color(Color::from_rgb(0xC8, 0xC8, 0xC8));
+    document::with_canvas(&mut tile, |c| {
+        let mut dark = Paint::default();
+        dark.set_color(Color::from_rgb(0x80, 0x80, 0x80));
+        c.draw_rect(Rect::from_xywh(0.0, 0.0, CELL as f32, CELL as f32), &dark);
+        c.draw_rect(
+            Rect::from_xywh(CELL as f32, CELL as f32, CELL as f32, CELL as f32),
+            &dark,
+        );
+    });
+    tile.as_image().to_shader(
+        (TileMode::Repeat, TileMode::Repeat),
+        SamplingOptions::default(),
+        None,
+    )
+}
+
 fn update_shape(v: &mut VectorObject, start: Point, cur: Point) {
     if matches!(v.kind, VectorKind::Line | VectorKind::Arrow) {
         v.p2 = cur;
     } else {
-        v.bounds = Rect::from_ltrb(start.x.min(cur.x), start.y.min(cur.y), start.x.max(cur.x), start.y.max(cur.y));
+        v.bounds = Rect::from_ltrb(
+            start.x.min(cur.x),
+            start.y.min(cur.y),
+            start.x.max(cur.x),
+            start.y.max(cur.y),
+        );
         // The triangle points the way you drag.
         if v.kind == VectorKind::Triangle {
             v.points_up = cur.y <= start.y;
@@ -602,7 +876,9 @@ fn update_shape(v: &mut VectorObject, start: Point, cur: Point) {
 fn flatten_polyline(path: &Path, spacing: f32) -> Vec<Point> {
     let verts = path.points();
     let mut out = Vec::new();
-    let Some(first) = verts.first() else { return out };
+    let Some(first) = verts.first() else {
+        return out;
+    };
     let spacing = spacing.max(1.0);
     out.push(*first);
     for w in verts.windows(2) {
@@ -649,7 +925,10 @@ mod tests {
     #[test]
     fn stroke_is_clipped_to_the_selection() {
         let mut e = editor();
-        e.begin_brush(Point::new(10.0, 50.0), Some(Path::rect(Rect::from_ltrb(0.0, 0.0, 40.0, 100.0), None)));
+        e.begin_brush(
+            Point::new(10.0, 50.0),
+            Some(Path::rect(Rect::from_ltrb(0.0, 0.0, 40.0, 100.0), None)),
+        );
         e.extend(Point::new(90.0, 50.0));
         e.end_gesture();
         assert_eq!(paint_alpha(&e, 20, 50), 255);
@@ -720,14 +999,50 @@ mod tests {
         e.begin_region(DrawTool::AbsoluteEraser, Point::new(10.0, 10.0), true, None);
         e.extend(Point::new(30.0, 40.0));
         e.end_gesture();
-        assert_eq!(e.absolute_bounds, Some(Rect::from_ltrb(10.0, 10.0, 30.0, 40.0)));
+        assert_eq!(
+            e.absolute_bounds,
+            Some(Rect::from_ltrb(10.0, 10.0, 30.0, 40.0))
+        );
         assert!(e.document().has_absolute);
     }
 
     #[test]
     fn sampling_reads_the_composite() {
         let e = editor();
-        assert_eq!(e.sample_color(Point::new(3.0, 3.0)), Color::from_rgb(0, 128, 0));
+        assert_eq!(
+            e.sample_color(Point::new(3.0, 3.0)),
+            Color::from_rgb(0, 128, 0)
+        );
+    }
+
+    #[test]
+    fn painting_shows_committed_and_live_ink() {
+        let mut e = editor();
+        e.begin_brush(Point::new(10.0, 50.0), None);
+        e.extend(Point::new(90.0, 50.0));
+        let live = e.live_bounds().unwrap();
+        assert!(live.left <= 10 && live.top <= 48 && live.right >= 90 && live.bottom >= 52);
+        let mut out = document::new_bitmap(100, 100);
+        document::with_canvas(&mut out, |c| e.paint(c));
+        assert_eq!(
+            document::pixels(&out)[50 * out.row_bytes() + 50 * 4 + 3],
+            255
+        );
+        e.end_gesture();
+        assert!(e.live_bounds().is_none());
+    }
+
+    #[test]
+    fn live_eraser_preview_hides_paint_before_commit() {
+        let mut e = editor();
+        e.begin_brush(Point::new(0.0, 50.0), None);
+        e.extend(Point::new(100.0, 50.0));
+        e.end_gesture();
+        e.begin_region(DrawTool::Eraser, Point::new(0.0, 0.0), true, None);
+        e.extend(Point::new(100.0, 100.0));
+        let mut out = document::new_bitmap(100, 100);
+        document::with_canvas(&mut out, |c| e.paint(c));
+        assert_eq!(document::pixels(&out)[50 * out.row_bytes() + 50 * 4 + 3], 0);
     }
 
     #[test]

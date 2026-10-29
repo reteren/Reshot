@@ -15,7 +15,8 @@ pub static SETTINGS_FILE: LazyLock<PathBuf> = LazyLock::new(|| APP_DATA_DIR.join
 /// `%AppData%\reshot\logs`.
 pub static LOGS_DIR: LazyLock<PathBuf> = LazyLock::new(|| APP_DATA_DIR.join("logs"));
 /// Default screenshot output folder: `Pictures\reshot`.
-pub static DEFAULT_SCREENSHOTS_DIR: LazyLock<PathBuf> = LazyLock::new(|| known(dirs::picture_dir()));
+pub static DEFAULT_SCREENSHOTS_DIR: LazyLock<PathBuf> =
+    LazyLock::new(|| known(dirs::picture_dir()));
 /// Default video output folder: `Videos\reshot`.
 pub static DEFAULT_VIDEOS_DIR: LazyLock<PathBuf> = LazyLock::new(|| known(dirs::video_dir()));
 /// Default audio-recording output folder: `Music\reshot`.

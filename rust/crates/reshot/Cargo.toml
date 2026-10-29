@@ -8,6 +8,7 @@ license.workspace = true
 reshot-core.workspace = true
 reshot-capture.workspace = true
 reshot-platform.workspace = true
+reshot-recording.workspace = true
 gpui.workspace = true
 anyhow.workspace = true
 log.workspace = true
@@ -22,6 +23,7 @@ windows = { workspace = true, features = [
     "Win32_Graphics_Gdi",
     "Win32_UI_HiDpi",
 ] }
+rust-embed = "8.13.0"
 
 [build-dependencies]
 winresource = "0.1"

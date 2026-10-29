@@ -1,7 +1,9 @@
 //! Brush strokes and vector objects (SPEC §6). Pure Skia, no UI. Shapes and text are kept as
 //! vectors only while being drawn; on commit they are baked into the paint layer.
 
-use skia_safe::{Canvas, Color, Font, Paint, PaintCap, PaintJoin, PaintStyle, Path, PathBuilder, Point, Rect};
+use skia_safe::{
+    Canvas, Color, Font, Paint, PaintCap, PaintJoin, PaintStyle, Path, PathBuilder, Point, Rect,
+};
 
 use crate::fonts;
 
@@ -43,7 +45,11 @@ pub struct BrushStroke {
 
 impl BrushStroke {
     pub fn new(settings: BrushSettings) -> Self {
-        Self { path: PathBuilder::new(), started: false, settings }
+        Self {
+            path: PathBuilder::new(),
+            started: false,
+            settings,
+        }
     }
 
     pub fn is_empty(&self) -> bool {
@@ -152,9 +158,16 @@ impl VectorObject {
 
     fn triangle_path(&self) -> Path {
         let b = self.bounds;
-        let (apex, base) = if self.points_up { (b.top, b.bottom) } else { (b.bottom, b.top) };
+        let (apex, base) = if self.points_up {
+            (b.top, b.bottom)
+        } else {
+            (b.bottom, b.top)
+        };
         let mut path = PathBuilder::new();
-        path.move_to((b.center_x(), apex)).line_to((b.right, base)).line_to((b.left, base)).close();
+        path.move_to((b.center_x(), apex))
+            .line_to((b.right, base))
+            .line_to((b.left, base))
+            .close();
         path.detach()
     }
 
@@ -215,7 +228,10 @@ impl VectorObject {
     fn text_bounds(&self) -> Rect {
         let font = self.font();
         let lines: Vec<&str> = self.text.split('\n').collect();
-        let width = lines.iter().map(|l| font.measure_str(l, None).0).fold(0.0f32, f32::max);
+        let width = lines
+            .iter()
+            .map(|l| font.measure_str(l, None).0)
+            .fold(0.0f32, f32::max);
         let (spacing, m) = font.metrics();
         let height = (lines.len() - 1) as f32 * spacing + (m.descent - m.ascent);
         // The floor keeps an empty or whitespace-only object grabbable.
@@ -288,7 +304,10 @@ mod tests {
     fn doubling_the_font_size_roughly_doubles_the_box() {
         let small = text("Reshot", 24.0, None).compute_bounds();
         let large = text("Reshot", 48.0, None).compute_bounds();
-        let (rw, rh) = (large.width() / small.width(), large.height() / small.height());
+        let (rw, rh) = (
+            large.width() / small.width(),
+            large.height() / small.height(),
+        );
         assert!((1.8..=2.2).contains(&rw), "{rw}");
         assert!((1.8..=2.2).contains(&rh), "{rh}");
     }
@@ -312,16 +331,26 @@ mod tests {
     fn different_families_measure_differently() {
         const SAMPLE: &str = "Reshot capture overlay";
         let baseline = t(SAMPLE).width();
-        let installed: Vec<&str> = ["Courier New", "Times New Roman", "Impact", "Consolas", "Georgia"]
-            .into_iter()
-            .filter(|c| fonts::families().iter().any(|f| f.family.eq_ignore_ascii_case(c)))
-            .collect();
+        let installed: Vec<&str> = [
+            "Courier New",
+            "Times New Roman",
+            "Impact",
+            "Consolas",
+            "Georgia",
+        ]
+        .into_iter()
+        .filter(|c| {
+            fonts::families()
+                .iter()
+                .any(|f| f.family.eq_ignore_ascii_case(c))
+        })
+        .collect();
         if installed.is_empty() {
             return;
         }
-        assert!(installed
-            .iter()
-            .any(|c| (text(SAMPLE, 32.0, Some(c)).compute_bounds().width() - baseline).abs() > 0.5));
+        assert!(installed.iter().any(|c| {
+            (text(SAMPLE, 32.0, Some(c)).compute_bounds().width() - baseline).abs() > 0.5
+        }));
     }
 
     #[test]

@@ -27,7 +27,10 @@ pub struct UndoHistory<Ctx: ?Sized> {
 
 impl<Ctx: ?Sized> Default for UndoHistory<Ctx> {
     fn default() -> Self {
-        Self { undo: VecDeque::new(), redo: Vec::new() }
+        Self {
+            undo: VecDeque::new(),
+            redo: Vec::new(),
+        }
     }
 }
 
@@ -55,14 +58,18 @@ impl<Ctx: ?Sized> UndoHistory<Ctx> {
     }
 
     pub fn undo(&mut self, ctx: &mut Ctx) -> bool {
-        let Some(mut c) = self.undo.pop_back() else { return false };
+        let Some(mut c) = self.undo.pop_back() else {
+            return false;
+        };
         c.undo(ctx);
         self.redo.push(c);
         true
     }
 
     pub fn redo(&mut self, ctx: &mut Ctx) -> bool {
-        let Some(mut c) = self.redo.pop() else { return false };
+        let Some(mut c) = self.redo.pop() else {
+            return false;
+        };
         c.redo(ctx);
         self.undo.push_back(c);
         true
@@ -74,7 +81,11 @@ impl<Ctx: ?Sized> UndoHistory<Ctx> {
     }
 
     pub fn retained_bytes(&self) -> usize {
-        self.undo.iter().chain(self.redo.iter()).map(|c| c.retained_bytes()).sum()
+        self.undo
+            .iter()
+            .chain(self.redo.iter())
+            .map(|c| c.retained_bytes())
+            .sum()
     }
 }
 
@@ -120,20 +131,34 @@ unsafe impl Send for LayerRegionCommand {}
 
 impl LayerRegionCommand {
     /// `before` and `after` come from [`document::snapshot_region`] on the same region.
-    pub fn new(doc: &CaptureDocument, layer: Layer, region: IRect, before: Bitmap, after: Bitmap) -> Self {
+    pub fn new(
+        doc: &CaptureDocument,
+        layer: Layer,
+        region: IRect,
+        before: Bitmap,
+        after: Bitmap,
+    ) -> Self {
         let (w, h) = (doc.width(), doc.height());
         let origin_x = region.left.clamp(0, w);
         let origin_y = region.top.clamp(0, h);
         let full_bytes = before.compute_byte_size() + after.compute_byte_size();
-        let (payload, bytes) = if before.width() == after.width() && before.height() == after.height() {
-            match build_delta(&before, &after, full_bytes) {
-                Some((runs, bytes)) => (Payload::Runs(runs), bytes),
-                None => (Payload::Full { before, after }, full_bytes),
-            }
-        } else {
-            (Payload::Full { before, after }, full_bytes)
-        };
-        Self { layer, region, origin_x, origin_y, payload, bytes }
+        let (payload, bytes) =
+            if before.width() == after.width() && before.height() == after.height() {
+                match build_delta(&before, &after, full_bytes) {
+                    Some((runs, bytes)) => (Payload::Runs(runs), bytes),
+                    None => (Payload::Full { before, after }, full_bytes),
+                }
+            } else {
+                (Payload::Full { before, after }, full_bytes)
+            };
+        Self {
+            layer,
+            region,
+            origin_x,
+            origin_y,
+            payload,
+            bytes,
+        }
     }
 
     /// Snapshots `region` of `layer`, runs `edit`, snapshots again and returns the command.
@@ -152,9 +177,11 @@ impl LayerRegionCommand {
     fn apply(&self, doc: &mut CaptureDocument, use_before: bool) {
         let bitmap = doc.layer_mut(self.layer);
         match &self.payload {
-            Payload::Full { before, after } => {
-                document::restore_region(bitmap, self.region, if use_before { before } else { after })
-            }
+            Payload::Full { before, after } => document::restore_region(
+                bitmap,
+                self.region,
+                if use_before { before } else { after },
+            ),
             Payload::Runs(runs) => {
                 let rb = bitmap.row_bytes();
                 let px = document::pixels_mut(bitmap);
@@ -184,7 +211,11 @@ impl<Ctx: HasDocument + ?Sized> UndoableCommand<Ctx> for LayerRegionCommand {
     }
 }
 
-fn build_delta(before: &Bitmap, after: &Bitmap, max_payload: usize) -> Option<(Vec<SnapshotRun>, usize)> {
+fn build_delta(
+    before: &Bitmap,
+    after: &Bitmap,
+    max_payload: usize,
+) -> Option<(Vec<SnapshotRun>, usize)> {
     let (w, h) = (before.width() as usize, before.height() as usize);
     let (brb, arb) = (before.row_bytes(), after.row_bytes());
     let (b, a) = (document::pixels(before), document::pixels(after));
@@ -245,7 +276,10 @@ mod tests {
     }
 
     fn noop() -> Counter {
-        Counter { undo: Box::new(|| {}), redo: Box::new(|| {}) }
+        Counter {
+            undo: Box::new(|| {}),
+            redo: Box::new(|| {}),
+        }
     }
 
     #[test]
@@ -253,7 +287,10 @@ mod tests {
         let value = Arc::new(Mutex::new(1));
         let (u, r) = (value.clone(), value.clone());
         let mut h = UndoHistory::<()>::new();
-        h.push(Counter { undo: Box::new(move || *u.lock().unwrap() -= 1), redo: Box::new(move || *r.lock().unwrap() += 1) });
+        h.push(Counter {
+            undo: Box::new(move || *u.lock().unwrap() -= 1),
+            redo: Box::new(move || *r.lock().unwrap() += 1),
+        });
         assert!(h.can_undo());
         assert!(h.undo(&mut ()));
         assert_eq!(*value.lock().unwrap(), 0);
@@ -278,7 +315,10 @@ mod tests {
         let mut h = UndoHistory::<()>::new();
         for _ in 0..40 {
             let u = undos.clone();
-            h.push(Counter { undo: Box::new(move || *u.lock().unwrap() += 1), redo: Box::new(|| {}) });
+            h.push(Counter {
+                undo: Box::new(move || *u.lock().unwrap() += 1),
+                redo: Box::new(|| {}),
+            });
         }
         let mut count = 0;
         while h.undo(&mut ()) {
@@ -308,9 +348,16 @@ mod tests {
         red.set_color(Color::RED);
         let region = IRect::from_ltrb(10, 10, 30, 30);
         let cmd = LayerRegionCommand::record(&mut doc, Layer::Paint, region, |d| {
-            d.commit_stroke(&Path::rect(Rect::from_ltrb(12.0, 12.0, 20.0, 20.0), None), &red, None)
+            d.commit_stroke(
+                &Path::rect(Rect::from_ltrb(12.0, 12.0, 20.0, 20.0), None),
+                &red,
+                None,
+            )
         });
-        assert!(matches!(cmd.payload, Payload::Runs(_)), "a small stroke should store a delta");
+        assert!(
+            matches!(cmd.payload, Payload::Runs(_)),
+            "a small stroke should store a delta"
+        );
         let mut h = UndoHistory::<CaptureDocument>::new();
         h.push(cmd);
         assert_eq!(paint_layer_px(&doc, 15, 15), [0, 0, 255, 255]);
@@ -337,7 +384,13 @@ mod tests {
             }
         }
         let doc = CaptureDocument::new(8, 8);
-        let cmd = LayerRegionCommand::new(&doc, Layer::Paint, IRect::from_ltrb(0, 0, 8, 8), before, after);
+        let cmd = LayerRegionCommand::new(
+            &doc,
+            Layer::Paint,
+            IRect::from_ltrb(0, 0, 8, 8),
+            before,
+            after,
+        );
         assert!(matches!(cmd.payload, Payload::Full { .. }));
     }
 }

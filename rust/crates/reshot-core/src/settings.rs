@@ -131,7 +131,10 @@ impl Default for SettingsService {
 
 impl SettingsService {
     pub fn new(file: impl Into<PathBuf>) -> Self {
-        Self { file: file.into(), current: AppSettings::default() }
+        Self {
+            file: file.into(),
+            current: AppSettings::default(),
+        }
     }
 
     pub fn path(&self) -> &Path {
@@ -150,7 +153,10 @@ impl SettingsService {
     pub fn load(&mut self) -> &AppSettings {
         let settings = match std::fs::read_to_string(&self.file) {
             Ok(json) => parse(&json).unwrap_or_else(|e| {
-                log::error!("Settings: failed to read {}, using defaults: {e}", self.file.display());
+                log::error!(
+                    "Settings: failed to read {}, using defaults: {e}",
+                    self.file.display()
+                );
                 AppSettings::default()
             }),
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
@@ -160,7 +166,10 @@ impl SettingsService {
                 return &self.current;
             }
             Err(e) => {
-                log::error!("Settings: failed to read {}, using defaults: {e}", self.file.display());
+                log::error!(
+                    "Settings: failed to read {}, using defaults: {e}",
+                    self.file.display()
+                );
                 AppSettings::default()
             }
         };
@@ -180,7 +189,8 @@ impl SettingsService {
             if let Some(dir) = self.file.parent() {
                 std::fs::create_dir_all(dir)?;
             }
-            let json = serde_json::to_string_pretty(&self.current).map_err(std::io::Error::other)?;
+            let json =
+                serde_json::to_string_pretty(&self.current).map_err(std::io::Error::other)?;
             std::fs::write(&self.file, json)
         })();
         if let Err(e) = result {
@@ -309,7 +319,10 @@ mod tests {
         let (_d, f) = temp();
         let mut svc = SettingsService::new(&f);
         let s = svc.load();
-        assert_eq!(PathBuf::from(&s.paths.screenshots), *paths::DEFAULT_SCREENSHOTS_DIR);
+        assert_eq!(
+            PathBuf::from(&s.paths.screenshots),
+            *paths::DEFAULT_SCREENSHOTS_DIR
+        );
         assert_eq!(PathBuf::from(&s.paths.videos), *paths::DEFAULT_VIDEOS_DIR);
     }
 
@@ -365,7 +378,14 @@ mod tests {
         svc.load();
         svc.save();
         let json = std::fs::read_to_string(&f).unwrap();
-        for key in ["\"hotkey\"", "\"askOnSave\"", "\"radial\"", "\"clickToChoose\"", "\"overlay\"", "\"hideFromCapture\""] {
+        for key in [
+            "\"hotkey\"",
+            "\"askOnSave\"",
+            "\"radial\"",
+            "\"clickToChoose\"",
+            "\"overlay\"",
+            "\"hideFromCapture\"",
+        ] {
             assert!(json.contains(key), "missing {key}");
         }
         assert!(!json.contains("\"Hotkey\""));

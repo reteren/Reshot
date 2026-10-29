@@ -1,24 +1,21 @@
-//! Icons compiled into the binary. gpui asks for them by path through [`Assets`].
+//! Icons compiled into the binary. Everything under `assets/` is embedded, so adding an icon
+//! is just dropping the file in; gpui asks for it by path (`icons/brush.svg`).
 
 use gpui::{AssetSource, Result, SharedString};
+use rust_embed::RustEmbed;
 use std::borrow::Cow;
 
-macro_rules! embedded {
-    ($($path:literal),* $(,)?) => {
-        const FILES: &[(&str, &[u8])] = &[$(($path, include_bytes!(concat!("../assets/", $path)))),*];
-    };
-}
-
-embedded!["icons/tick.svg"];
-
+#[derive(RustEmbed)]
+#[folder = "assets"]
+#[include = "icons/*"]
 pub struct Assets;
 
 impl AssetSource for Assets {
     fn load(&self, path: &str) -> Result<Option<Cow<'static, [u8]>>> {
-        Ok(FILES.iter().find(|(p, _)| *p == path).map(|(_, b)| Cow::Borrowed(*b)))
+        Ok(<Assets as RustEmbed>::get(path).map(|f| f.data))
     }
 
     fn list(&self, path: &str) -> Result<Vec<SharedString>> {
-        Ok(FILES.iter().filter(|(p, _)| p.starts_with(path)).map(|(p, _)| (*p).into()).collect())
+        Ok(<Assets as RustEmbed>::iter().filter(|p| p.starts_with(path)).map(SharedString::from).collect())
     }
 }

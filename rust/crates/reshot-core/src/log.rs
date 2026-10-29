@@ -13,7 +13,9 @@ struct FileLogger {
     file: Mutex<Option<File>>,
 }
 
-static LOGGER: FileLogger = FileLogger { file: Mutex::new(None) };
+static LOGGER: FileLogger = FileLogger {
+    file: Mutex::new(None),
+};
 
 impl log::Log for FileLogger {
     fn enabled(&self, m: &log::Metadata) -> bool {
@@ -40,7 +42,10 @@ impl log::Log for FileLogger {
         let mut guard = self.file.lock();
         if let Some(f) = guard.as_mut() {
             // Roll over before writing, so the triggering line stays at the top of the file.
-            if f.metadata().map(|m| m.len() > MAX_LOG_BYTES).unwrap_or(false) {
+            if f.metadata()
+                .map(|m| m.len() > MAX_LOG_BYTES)
+                .unwrap_or(false)
+            {
                 let _ = f.set_len(0);
                 let _ = f.seek(SeekFrom::Start(0));
             }
@@ -60,7 +65,13 @@ fn open(path: &Path) -> Option<File> {
     if let Some(dir) = path.parent() {
         std::fs::create_dir_all(dir).ok()?;
     }
-    let mut f = OpenOptions::new().read(true).write(true).create(true).truncate(false).open(path).ok()?;
+    let mut f = OpenOptions::new()
+        .read(true)
+        .write(true)
+        .create(true)
+        .truncate(false)
+        .open(path)
+        .ok()?;
     if f.metadata().ok()?.len() > MAX_LOG_BYTES {
         f.set_len(0).ok()?;
     }
@@ -80,9 +91,16 @@ pub fn set_log_file(path: Option<PathBuf>) {
 pub fn init() {
     let _ = crate::paths::ensure_app_data_dir();
     // A debug build logs to its own file so it can run next to an installed Reshot.
-    let name = if cfg!(debug_assertions) { "reshot-dev.log" } else { "reshot.log" };
+    let name = if cfg!(debug_assertions) {
+        "reshot-dev.log"
+    } else {
+        "reshot.log"
+    };
     set_log_file(Some(crate::paths::LOGS_DIR.join(name)));
-    log::info!("=== Reshot session started (pid {}) ===", std::process::id());
+    log::info!(
+        "=== Reshot session started (pid {}) ===",
+        std::process::id()
+    );
 }
 
 #[cfg(test)]

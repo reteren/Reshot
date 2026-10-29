@@ -40,7 +40,6 @@ pub struct SessionStateMachine {
     listeners: Vec<Listener>,
 }
 
-
 impl SessionStateMachine {
     pub fn new() -> Self {
         Self::default()
@@ -66,7 +65,11 @@ impl SessionStateMachine {
             return true;
         }
         if !self.can_transition(to) {
-            log::warn!("Session: illegal transition {:?} → {:?} ignored.", self.state, to);
+            log::warn!(
+                "Session: illegal transition {:?} → {:?} ignored.",
+                self.state,
+                to
+            );
             return false;
         }
         let from = std::mem::replace(&mut self.state, to);
