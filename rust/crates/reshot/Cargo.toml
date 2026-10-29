@@ -9,6 +9,7 @@ reshot-core.workspace = true
 reshot-capture.workspace = true
 reshot-platform.workspace = true
 reshot-recording.workspace = true
+reshot-ocr.workspace = true
 gpui.workspace = true
 anyhow.workspace = true
 log.workspace = true
@@ -24,6 +25,7 @@ windows = { workspace = true, features = [
     "Win32_UI_HiDpi",
 ] }
 rust-embed = "8.13.0"
+rfd = "0.15"
 
 [build-dependencies]
 winresource = "0.1"

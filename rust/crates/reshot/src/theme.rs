@@ -170,3 +170,89 @@ pub fn check_row(id: impl Into<ElementId>, checked: bool, label: impl Into<Share
         .child(check_box(checked))
         .child(label.into())
 }
+
+/// The accent at half strength: latched toggles and the current row of a list.
+pub fn accent_dim() -> Rgba {
+    rgba(0x3C989880)
+}
+
+/// An icon button. Toolbar style (`raised = false`) is flat until touched: hover fills with
+/// the accent and raises a bevel. Panel style (`raised = true`) is always a raised button.
+/// Either way a press inverts the bevel, and `on` (the active tool, a latched toggle) keeps a
+/// dimmed accent with the inverted bevel so it reads as pressed.
+pub fn icon_button(id: impl Into<ElementId>, w: f32, h: f32, on: bool, raised: bool) -> Stateful<Div> {
+    let id = id.into();
+    let group: SharedString = format!("icon-{id}").into();
+    let (light, dark) = (bevel_light(), bevel_dark());
+    let transparent = rgba(0x00000000);
+    let (outer_c, inner_c) = if on {
+        (dark, light)
+    } else if raised {
+        (light, dark)
+    } else {
+        (transparent, transparent)
+    };
+    let mut outer = div()
+        .id(id)
+        .group(group.clone())
+        .w(px(w))
+        .h(px(h))
+        .flex_none()
+        .cursor_default()
+        .border_t_1()
+        .border_l_1()
+        .border_color(outer_c)
+        .active(|s| s.border_color(dark));
+    outer = if on {
+        outer.bg(accent_dim())
+    } else if raised {
+        outer.bg(btn_bg()).hover(|s| s.bg(accent()))
+    } else {
+        outer.hover(|s| s.bg(accent()).border_color(light))
+    };
+    let mut inner = div()
+        .id(SharedString::from(format!("{group}-inner")))
+        .size_full()
+        .flex()
+        .items_center()
+        .justify_center()
+        .border_b_1()
+        .border_r_1()
+        .border_color(inner_c)
+        .group_active(group.clone(), |s| s.border_color(light));
+    if !on && !raised {
+        inner = inner.group_hover(group, |s| s.border_color(dark));
+    }
+    outer.child(inner)
+}
+
+/// VGUI tooltip: the panel tint with a raised bevel, 11 px light text.
+pub fn tooltip(text: &'static str) -> impl Fn(&mut gpui::Window, &mut gpui::App) -> gpui::AnyView + 'static {
+    move |_, cx| gpui::AppContext::new(cx, |_| Tooltip(text)).into()
+}
+
+struct Tooltip(&'static str);
+
+impl gpui::Render for Tooltip {
+    fn render(&mut self, _: &mut gpui::Window, _: &mut gpui::Context<Self>) -> impl IntoElement {
+        div()
+            .font_family(FONT)
+            .bg(panel_bg())
+            .border_t_1()
+            .border_l_1()
+            .border_color(bevel_light())
+            .child(
+                div()
+                    .border_b_1()
+                    .border_r_1()
+                    .border_color(bevel_dark())
+                    .px(px(6.))
+                    .py(px(3.))
+                    .text_size(px(11.))
+                    .font_weight(FontWeight::LIGHT)
+                    .text_color(text())
+                    .max_w(px(360.))
+                    .child(self.0),
+            )
+    }
+}

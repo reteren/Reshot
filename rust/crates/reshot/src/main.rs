@@ -7,6 +7,7 @@ mod assets;
 mod export;
 mod overlay;
 mod radial;
+mod recording;
 mod settings_window;
 mod theme;
 mod tray_menu;

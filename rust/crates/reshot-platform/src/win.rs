@@ -246,3 +246,12 @@ pub fn force_foreground(hwnd: HWND, invasive: bool) -> bool {
         GetForegroundWindow() == hwnd
     }
 }
+
+/// Shows or hides a window without activating it.
+pub fn show(hwnd: HWND, visible: bool) {
+    use windows::Win32::UI::WindowsAndMessaging::{SW_HIDE, SW_SHOWNA, ShowWindow};
+    // SAFETY: hwnd belongs to this process.
+    unsafe {
+        let _ = ShowWindow(hwnd, if visible { SW_SHOWNA } else { SW_HIDE });
+    }
+}

@@ -436,6 +436,16 @@ impl Editor {
         }
     }
 
+    /// Re-typesets the text under the caret after its tool's settings changed: seeing the
+    /// sentence change family or colour is why the picker sits in the panel.
+    pub fn restyle_text(&mut self, s: &BrushSettings) {
+        if let Some(t) = &mut self.text {
+            t.color = s.color;
+            t.font_size = (s.thickness * 5.0).max(16.0);
+            t.font_family = s.font_family.clone();
+        }
+    }
+
     /// Esc, click-away or tool switch: keeps what was typed.
     pub fn commit_text(&mut self) {
         let Some(t) = self.text.take() else { return };

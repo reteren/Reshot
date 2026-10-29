@@ -27,15 +27,15 @@ Each phase ends with something runnable.
 
 | # | Scope | Owner | State |
 |---|---|---|---|
-| R0 | Workspace, roadmap, gpui spike: transparent topmost popup over the virtual desktop, HWND access, exclude-from-capture | Claude | in progress |
-| R1 | `reshot-core`: settings, hotkey parsing, session state machine, log, document model, history, tools rasterisation, font catalogue + ported tests | Claude | |
-| R2 | `reshot-capture`: DD snapshot, WGC fallback, WGC stream | Codex | |
-| R3 | `reshot-recording`: ffmpeg, WASAPI, process loopback, mux, M4A + ported tests | Codex | |
-| R4 | `reshot-ocr` | Codex | |
-| R5 | `reshot-platform`: hotkey, tap/hold, tray, single instance, autostart, clipboard | Claude | |
-| R6 | App shell: tray menu window, capture → overlay with rectangular selection, copy/save | Claude | |
-| R7 | Overlay parity: all selection shapes, toolbar + flyouts, drawing, erasers, effects, text, eyedropper, undo, OCR layer | Claude + Codex | |
-| R8 | Recording UI: REC HUD, corner brackets, audio-track prompt, radial menu | Codex | |
+| R0 | Workspace, roadmap, gpui spike: transparent topmost popup over the virtual desktop, HWND access, exclude-from-capture | Claude | done |
+| R1 | `reshot-core`: settings, hotkey parsing, session state machine, log, document model, history, tools rasterisation, font catalogue + ported tests | Claude | done |
+| R2 | `reshot-capture`: DD snapshot, WGC fallback, WGC stream | Codex | done |
+| R3 | `reshot-recording`: ffmpeg, WASAPI, process loopback, mux, M4A + ported tests | Codex | done |
+| R4 | `reshot-ocr` | Codex | done |
+| R5 | `reshot-platform`: hotkey, tap/hold, tray, single instance, autostart, clipboard | Claude | done |
+| R6 | App shell: tray menu window, capture → overlay with rectangular selection, copy/save | Claude | done |
+| R7 | Overlay parity: all selection shapes, toolbar + flyouts, drawing, erasers, effects, text, eyedropper, undo, OCR layer | Claude | in progress |
+| R8 | Recording UI: REC HUD, corner brackets, audio-track prompt, radial menu | Codex | in progress |
 | R9 | Settings window in gpui (replaces Tauri) | Claude | |
 | R10 | Release: build script, installer, portable zip, version bump; delete C# + Tauri | Claude | |
 
@@ -47,3 +47,25 @@ Each phase ends with something runnable.
   interop stays in its crate.
 - `cargo clippy --workspace` and `cargo test --workspace` must pass before handing work back.
 - No placeholders, no `todo!()` left in a finished phase.
+
+## Notes learned on the way
+
+- **gpui quits when its last window closes** (Windows). The app keeps one hidden anchor
+  window for its whole life.
+- **Win32 calls that re-enter the window procedure** (`SetWindowPos`, `SetForegroundWindow`,
+  `ShowWindow`) must not run inside a gpui `update`/`defer`: the procedure finds the `App`
+  already borrowed ("RefCell already borrowed"). `winutil::after_update` runs them in a
+  foreground task instead.
+- **gpui embeds its own manifest** (PerMonitorV2, common controls v6); a second MANIFEST
+  resource fails the link, so the app only embeds its icon.
+- **skia-safe 0.156 / bindgen 0.73.2**: bindgen resolves `syn 3` with `prettyplease 0.2`
+  (syn 2) and fails to build. The lockfile pins bindgen 0.73.2 to `prettyplease 0.3.0`; do not
+  `cargo update` it away. The prebuilt Skia has no WebP encoder, so WebP goes through libwebp.
+- **Debug builds** use their own single-instance names and `reshot-dev.log`, and never touch
+  autostart, so they run next to an installed Reshot without disturbing it.
+
+## Deliberate deviations from the C# build
+
+- The overlay cursor is the system crosshair; gpui cannot show the C# build's outlined
+  custom crosshair.
+- Flyouts close instantly instead of fading out (they still rise in when opening).
