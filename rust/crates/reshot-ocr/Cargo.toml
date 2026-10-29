@@ -1,0 +1,17 @@
+[package]
+name = "reshot-ocr"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+anyhow = { workspace = true }
+log = { workspace = true }
+windows = { workspace = true, features = [
+    "Foundation", "Globalization", "Graphics_Imaging", "Media_Ocr", "Storage_Streams",
+    "Win32_System_WinRT",
+] }
+
+[dev-dependencies]
+png = "0.17"
