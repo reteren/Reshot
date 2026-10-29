@@ -77,3 +77,6 @@ ehthumbs.db
 Desktop.ini
 desktop.ini
 .DS_Store
+
+# Rust rewrite
+rust/target/

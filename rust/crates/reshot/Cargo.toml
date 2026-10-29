@@ -1,0 +1,15 @@
+[package]
+name = "reshot"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+gpui.workspace = true
+anyhow.workspace = true
+raw-window-handle = "0.6"
+windows = { workspace = true, features = [
+    "Win32_Foundation",
+    "Win32_UI_WindowsAndMessaging",
+    "Win32_Graphics_Gdi",
+] }

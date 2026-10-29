@@ -1,0 +1,33 @@
+[workspace]
+resolver = "3"
+members = ["crates/*"]
+
+[workspace.package]
+version = "2.0.0"
+edition = "2024"
+license = "MIT"
+rust-version = "1.90"
+
+[workspace.dependencies]
+reshot-core = { path = "crates/reshot-core" }
+reshot-capture = { path = "crates/reshot-capture" }
+reshot-recording = { path = "crates/reshot-recording" }
+reshot-ocr = { path = "crates/reshot-ocr" }
+reshot-platform = { path = "crates/reshot-platform" }
+
+gpui = "0.2.2"
+anyhow = "1"
+thiserror = "2"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+tiny-skia = "0.11"
+parking_lot = "0.12"
+crossbeam-channel = "0.5"
+windows = "0.61"
+windows-core = "0.61"
+log = "0.4"
+
+[profile.release]
+lto = "thin"
+codegen-units = 1
+strip = true
