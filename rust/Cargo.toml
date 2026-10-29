@@ -25,6 +25,7 @@ parking_lot = "0.12"
 crossbeam-channel = "0.5"
 windows = "0.61"
 windows-core = "0.61"
+skia-safe = "0.156"
 log = "0.4"
 
 [profile.release]

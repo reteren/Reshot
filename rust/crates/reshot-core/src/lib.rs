@@ -1,14 +1,9 @@
-pub fn add(left: u64, right: u64) -> u64 {
-    left + right
-}
+//! Reshot core: everything that knows nothing about windows. Document model, undo, tools,
+//! settings, hotkey parsing, the session state machine and the logger.
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn it_works() {
-        let result = add(2, 2);
-        assert_eq!(result, 4);
-    }
-}
+pub mod filename;
+pub mod hotkey;
+pub mod log;
+pub mod paths;
+pub mod session;
+pub mod settings;

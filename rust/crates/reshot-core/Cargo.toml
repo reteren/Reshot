@@ -1,6 +1,18 @@
 [package]
 name = "reshot-core"
-version = "0.1.0"
-edition = "2024"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
 
 [dependencies]
+serde.workspace = true
+serde_json.workspace = true
+tiny-skia.workspace = true
+parking_lot.workspace = true
+log.workspace = true
+dirs = "6"
+chrono = { version = "0.4", default-features = false, features = ["clock", "std"] }
+skia-safe.workspace = true
+
+[dev-dependencies]
+tempfile = "3"
