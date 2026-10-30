@@ -161,8 +161,7 @@ fn on_shell_event(event: ShellEvent, cx: &mut App) {
         ShellEvent::TrayCapture => capture(cx, "tray"),
         ShellEvent::SecondInstance => {
             log::info!("SingleInstance: another launch was redirected here.");
-            let app = cx.global::<ReshotApp>();
-            app.shell.show_balloon("Reshot is already running", "It lives in the tray.", BalloonIcon::Info);
+            balloon(cx, "Reshot is already running", "It lives in the tray.", BalloonIcon::Info);
         }
     }
 }

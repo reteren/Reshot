@@ -30,7 +30,8 @@ fn main() {
     log::info!("Startup: acquired single-instance lock.");
 
     // Tray icon and hotkey before anything else: they are what the user is waiting for.
-    let shell = match Shell::start(1, "Reshot", events_tx) {
+    let tooltip = if cfg!(debug_assertions) { "Reshot (dev)" } else { "Reshot" };
+    let shell = match Shell::start(1, tooltip, events_tx) {
         Ok(s) => s,
         Err(e) => {
             log::error!("Startup: shell thread failed: {e:#}");
