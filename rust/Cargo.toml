@@ -32,3 +32,9 @@ log = "0.4"
 lto = "thin"
 codegen-units = 1
 strip = true
+
+# Release optimisations with debug assertions on, so the build keeps the dev single-instance
+# names and log file and can be measured next to an installed Reshot.
+[profile.release-dev]
+inherits = "release"
+debug-assertions = true

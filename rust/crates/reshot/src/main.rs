@@ -39,7 +39,6 @@ fn main() {
         }
     };
     let capture_now = std::env::args().any(|a| a.eq_ignore_ascii_case("--capture"));
-    reshot_core::fonts::warmup();
 
     gpui::Application::new().with_assets(assets::Assets).run(move |cx| {
         app::init(cx, SettingsService::default(), shell, single, events_rx, capture_now);
