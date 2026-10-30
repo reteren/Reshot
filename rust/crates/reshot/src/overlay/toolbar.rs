@@ -196,7 +196,7 @@ impl Overlay {
     }
 
     fn click_tab(&mut self, tab: Tab, window: &mut Window, cx: &mut Context<Self>) {
-        self.flyout = None;
+        self.close_flyout();
         self.source_menu = None;
         match tab {
             Tab::Select => self.set_select(cx),
@@ -225,7 +225,10 @@ impl Overlay {
         }
         let Some(f) = tab.flyout() else { return };
         let reopen = self.flyout.as_ref().is_none_or(|o| o.kind != f);
-        self.flyout = reopen.then(|| FlyoutState { kind: f, by_hover: false, opened: Instant::now() });
+        self.close_flyout();
+        if reopen {
+            self.flyout = Some(FlyoutState { kind: f, by_hover: false, opened: Instant::now() });
+        }
         self.panel.close();
         cx.notify();
     }
@@ -267,7 +270,7 @@ impl Overlay {
             cx.background_executor().timer(HOVER_CLOSE).await;
             let _ = this.update(cx, |this, cx| {
                 if this.hover_generation == generation && !this.flyout_hovered {
-                    this.flyout = None;
+                    this.close_flyout();
                     cx.notify();
                 }
             });
@@ -276,7 +279,7 @@ impl Overlay {
     }
 
     fn open_source_menu(&mut self, for_video: bool, x: f32, y: f32, cx: &mut Context<Self>) {
-        self.flyout = None;
+        self.close_flyout();
         self.panel.close();
         let windows = reshot_recording::list_window_audio_sources().into_iter().map(|w| (w, true)).collect();
         self.source_menu = Some(SourceMenu { for_video, system: true, mic: true, windows, x, y });
@@ -345,16 +348,47 @@ impl Overlay {
     /// The open flyout, centred over its tab above the toolbar (or below it when there is no
     /// room), rising into place out of the tab.
     pub(super) fn render_flyout(
-        &self,
+        &mut self,
         toolbar_x: f32,
         toolbar_y: f32,
         strip_visible: bool,
         screen: (f32, f32, f32, f32),
         window: &mut Window,
         cx: &mut Context<Self>,
-    ) -> Option<AnyElement> {
-        let f = self.flyout.as_ref()?;
-        let (tab, items): (Tab, Vec<FlyoutEntry>) = match f.kind {
+    ) -> Vec<AnyElement> {
+        let geo = (toolbar_x, toolbar_y, strip_visible, screen);
+        let mut out = Vec::new();
+        if let Some((kind, since)) = self.closing_flyout {
+            let t = (since.elapsed().as_secs_f32() / FLYOUT_ANIM.as_secs_f32()).min(1.0);
+            let still_open = self.flyout.as_ref().is_some_and(|f| f.kind == kind);
+            if t >= 1.0 || still_open {
+                self.closing_flyout = None;
+            } else {
+                window.request_animation_frame();
+                out.push(self.flyout_element(kind, (1.0 - t).powi(3), false, geo, cx));
+            }
+        }
+        if let Some(f) = &self.flyout {
+            let t = (f.opened.elapsed().as_secs_f32() / FLYOUT_ANIM.as_secs_f32()).min(1.0);
+            if t < 1.0 {
+                window.request_animation_frame();
+            }
+            out.push(self.flyout_element(f.kind, 1.0 - (1.0 - t).powi(3), true, geo, cx));
+        }
+        out
+    }
+
+    /// One flyout at visibility `e` (0 hidden, 1 in place): it rises out of its tab while
+    /// appearing and sinks back while fading. Only the open one takes clicks.
+    fn flyout_element(
+        &self,
+        kind: Flyout,
+        e: f32,
+        interactive: bool,
+        (toolbar_x, toolbar_y, strip_visible, screen): (f32, f32, bool, (f32, f32, f32, f32)),
+        cx: &mut Context<Self>,
+    ) -> AnyElement {
+        let (tab, items): (Tab, Vec<FlyoutEntry>) = match kind {
             Flyout::Select => (
                 Tab::Select,
                 [ShapeKind::Rectangle, ShapeKind::Ellipse, ShapeKind::Triangle, ShapeKind::Lasso, ShapeKind::Polygon]
@@ -400,12 +434,6 @@ impl Overlay {
         let fx = super::panel::clamp_to(toolbar_x + tab.x() + (BTN_W - fw) / 2.0, sl, sr - fw);
         let fy = super::panel::clamp_to(fy, st, sb - fh);
 
-        let t = (f.opened.elapsed().as_secs_f32() / FLYOUT_ANIM.as_secs_f32()).min(1.0);
-        if t < 1.0 {
-            window.request_animation_frame();
-        }
-        let e = 1.0 - (1.0 - t).powi(3);
-
         let mut col = div().flex().flex_col();
         for (id, path, w, h, tip, on, item) in items {
             col = col.child(
@@ -414,7 +442,7 @@ impl Overlay {
                     .child(icon(path, w, h))
                     .tooltip(theme::tooltip(tip))
                     .on_click(cx.listener(move |this, _, _, cx| {
-                        this.flyout = None;
+                        this.close_flyout();
                         match item {
                             FlyoutItem::Shape(k) => this.set_shape(k, cx),
                             FlyoutItem::Tool(t) => this.set_draw(t, cx),
@@ -422,30 +450,31 @@ impl Overlay {
                     })),
             );
         }
-        Some(
-            div()
-                .id("flyout")
-                .occlude()
-                .absolute()
-                .left(px(fx))
-                .top(px(fy + (1.0 - e) * 14.0))
-                .opacity(e)
-                .p(px(FLYOUT_PAD))
-                .rounded(px(6.))
-                .bg(theme::panel_bg())
-                .child(col)
-                .on_hover(cx.listener(|this, hovered: &bool, _, cx| {
-                    this.flyout_hovered = *hovered;
-                    if *hovered {
-                        this.hover_generation += 1;
-                    } else {
-                        this.arm_flyout_close(cx);
-                    }
-                }))
-                .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
-                .on_mouse_down(MouseButton::Right, |_, _, cx| cx.stop_propagation())
-                .into_any_element(),
-        )
+        let el = div()
+            .absolute()
+            .left(px(fx))
+            .top(px(fy + (1.0 - e) * 14.0))
+            .opacity(e)
+            .p(px(FLYOUT_PAD))
+            .rounded(px(6.))
+            .bg(theme::panel_bg())
+            .child(col);
+        if !interactive {
+            return el.into_any_element();
+        }
+        el.id("flyout")
+            .occlude()
+            .on_hover(cx.listener(|this, hovered: &bool, _, cx| {
+                this.flyout_hovered = *hovered;
+                if *hovered {
+                    this.hover_generation += 1;
+                } else {
+                    this.arm_flyout_close(cx);
+                }
+            }))
+            .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
+            .on_mouse_down(MouseButton::Right, |_, _, cx| cx.stop_propagation())
+            .into_any_element()
     }
 
     /// The source picker, styled like the rest of the HUD. Everything starts checked (record

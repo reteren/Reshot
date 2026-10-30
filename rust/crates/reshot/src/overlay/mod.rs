@@ -112,6 +112,8 @@ pub struct Overlay {
     shift_down: bool,
 
     pub(crate) flyout: Option<FlyoutState>,
+    /// A flyout fading out after being closed, and when it started to.
+    closing_flyout: Option<(Flyout, Instant)>,
     flyout_hovered: bool,
     hover_generation: u64,
     source_menu: Option<toolbar::SourceMenu>,
@@ -193,6 +195,7 @@ impl Overlay {
                         cursor: None,
                         shift_down: false,
                         flyout: None,
+                        closing_flyout: None,
                         flyout_hovered: false,
                         hover_generation: 0,
                         source_menu: None,
@@ -303,6 +306,13 @@ impl Overlay {
         r
     }
 
+    /// Closes the open flyout; it fades and sinks back into its tab.
+    pub(crate) fn close_flyout(&mut self) {
+        if let Some(f) = self.flyout.take() {
+            self.closing_flyout = Some((f.kind, Instant::now()));
+        }
+    }
+
     // ---- Session end ----------------------------------------------------------------------
 
     fn close(&mut self, window: &mut Window, cx: &mut Context<Self>) {
@@ -330,7 +340,7 @@ impl Overlay {
         self.finish_editing(cx);
         self.mode = Mode::Select;
         self.panel.close();
-        self.flyout = None;
+        self.close_flyout();
         self.cursor = None;
         log::info!("Tool → Select.");
         cx.notify();
@@ -375,7 +385,7 @@ impl Overlay {
 
     /// Digits 1-0 activate toolbar slots left to right, exactly as clicking the tab would.
     pub(crate) fn activate_slot(&mut self, slot: u8, window: &mut Window, cx: &mut Context<Self>) {
-        self.flyout = None;
+        self.close_flyout();
         match slot {
             1 => self.set_select(cx),
             2 => self.set_draw(DrawTool::Brush, cx),
@@ -396,7 +406,7 @@ impl Overlay {
     fn on_left_down(&mut self, e: &MouseDownEvent, window: &mut Window, cx: &mut Context<Self>) {
         let p = self.to_frame(e.position);
         self.notice = None;
-        self.flyout = None;
+        self.close_flyout();
         self.source_menu = None;
         self.panel.blur_fields();
 
@@ -721,7 +731,7 @@ impl Overlay {
         if self.mode == Mode::Select || self.ocr.active {
             return;
         }
-        self.flyout = None;
+        self.close_flyout();
         if self.panel.is_open() {
             self.panel.close();
         } else {

@@ -248,8 +248,21 @@ fn on_hotkey(cx: &mut App) {
 /// wait for the first frame is the bulk of hotkey-to-overlay time; on the UI thread it froze
 /// the app instead of merely delaying it.
 pub fn capture(cx: &mut App, source: &'static str) {
+    // While recording, any capture request is the Stop control (SPEC §10).
+    if crate::recording::is_active(cx) {
+        log::info!("Stop recording via {source}.");
+        crate::recording::stop(cx);
+        return;
+    }
     let app = cx.global_mut::<ReshotApp>();
-    if app.overlay.is_some() {
+    if let Some(overlay) = app.overlay {
+        // Already up: bring it back in front instead of starting a second session.
+        if let Ok(Some(h)) = overlay.update(cx, |_, window, _| winutil::hwnd(window)) {
+            let raw = h.0 as isize;
+            winutil::after_update(cx, move || {
+                win::force_foreground(win::hwnd(raw), false);
+            });
+        }
         return;
     }
     if !app.session.try_transition(SessionState::Capturing) {
