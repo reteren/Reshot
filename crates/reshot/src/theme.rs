@@ -180,7 +180,18 @@ pub fn accent_dim() -> Rgba {
 /// the accent and raises a bevel. Panel style (`raised = true`) is always a raised button.
 /// Either way a press inverts the bevel, and `on` (the active tool, a latched toggle) keeps a
 /// dimmed accent with the inverted bevel so it reads as pressed.
-pub fn icon_button(id: impl Into<ElementId>, w: f32, h: f32, on: bool, raised: bool) -> Stateful<Div> {
+///
+/// `content` goes inside the inner (bottom/right) bevel element, which fills the button and
+/// centres it; anything chained on with `.child` lands after that element instead, below the
+/// button.
+pub fn icon_button(
+    id: impl Into<ElementId>,
+    w: f32,
+    h: f32,
+    on: bool,
+    raised: bool,
+    content: impl IntoElement,
+) -> Stateful<Div> {
     let id = id.into();
     let group: SharedString = format!("icon-{id}").into();
     let (light, dark) = (bevel_light(), bevel_dark());
@@ -223,7 +234,7 @@ pub fn icon_button(id: impl Into<ElementId>, w: f32, h: f32, on: bool, raised: b
     if !on && !raised {
         inner = inner.group_hover(group, |s| s.border_color(dark));
     }
-    outer.child(inner)
+    outer.child(inner.child(content))
 }
 
 /// VGUI tooltip: the panel tint with a raised bevel, 11 px light text.

@@ -4,12 +4,12 @@
 
 use windows::Win32::Foundation::{HWND, POINT, RECT};
 use windows::Win32::Graphics::Gdi::{
-    GetMonitorInfoW, MONITOR_DEFAULTTONEAREST, MONITORINFO, MonitorFromPoint, MonitorFromWindow,
+    ClientToScreen, GetMonitorInfoW, MONITOR_DEFAULTTONEAREST, MONITORINFO, MonitorFromPoint, MonitorFromWindow,
 };
 use windows::Win32::System::Threading::{AttachThreadInput, GetCurrentProcessId, GetCurrentThreadId};
 use windows::Win32::UI::Input::KeyboardAndMouse::{GetAsyncKeyState, ReleaseCapture, SetFocus};
 use windows::Win32::UI::WindowsAndMessaging::{
-    AllowSetForegroundWindow, BringWindowToTop, ClipCursor, GetCursorPos, GetForegroundWindow, GetSystemMetrics,
+    AllowSetForegroundWindow, BringWindowToTop, ClipCursor, GetClientRect, GetCursorPos, GetForegroundWindow, GetSystemMetrics,
     GetWindowRect, GetWindowThreadProcessId, HWND_TOPMOST, SM_CXSCREEN, SM_CXVIRTUALSCREEN, SM_CYSCREEN,
     SM_CYVIRTUALSCREEN, SM_XVIRTUALSCREEN, SM_YVIRTUALSCREEN, SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOSIZE,
     SWP_SHOWWINDOW, SetForegroundWindow, SetWindowDisplayAffinity, SetWindowPos, ShowCursor,
@@ -108,11 +108,39 @@ pub fn monitor_bounds(x: i32, y: i32) -> PxRect {
     monitor_info_at(x, y).map(|mi| mi.rcMonitor.into()).unwrap_or_else(primary_monitor_bounds)
 }
 
-/// Places a window topmost at exact physical-pixel bounds and shows it.
+/// Places a window topmost so that its client area covers exactly `r` (physical pixels), and
+/// shows it.
+///
+/// gpui's borderless windows keep `WS_CAPTION`, and Windows still insets their client area by
+/// the frame: 8 px left, right and bottom and 1 px at the top. Placing the window rect on `r`
+/// therefore drew everything 8 px right and 1 px down, which over a frozen frame reads as
+/// the whole desktop shifting while the overlay is up. The window is placed once, the insets
+/// measured, and the window grown by them.
 pub fn place_topmost(hwnd: HWND, r: PxRect) {
-    // SAFETY: hwnd belongs to this process.
+    // SAFETY: hwnd belongs to this process; the out-parameters are locals.
     unsafe {
         let _ = SetWindowPos(hwnd, Some(HWND_TOPMOST), r.left, r.top, r.width(), r.height(), SWP_SHOWWINDOW);
+        let mut client = RECT::default();
+        let mut origin = POINT::default();
+        if GetClientRect(hwnd, &mut client).is_err() || !ClientToScreen(hwnd, &mut origin).as_bool() {
+            return;
+        }
+        let left = origin.x - r.left;
+        let top = origin.y - r.top;
+        let right = r.right - (origin.x + client.right);
+        let bottom = r.bottom - (origin.y + client.bottom);
+        if (left, top, right, bottom) == (0, 0, 0, 0) {
+            return;
+        }
+        let _ = SetWindowPos(
+            hwnd,
+            Some(HWND_TOPMOST),
+            r.left - left,
+            r.top - top,
+            r.width() + left + right,
+            r.height() + top + bottom,
+            SWP_SHOWWINDOW,
+        );
     }
 }
 

@@ -311,9 +311,8 @@ impl Overlay {
                 row = row.child(divider());
             }
             let (path, w, h) = tab.icon();
-            let mut b = theme::icon_button(ElementId::Name(format!("tab-{tab:?}").into()), BTN_W, BTN_H, self.tab_is_on(tab), false)
+            let mut b = theme::icon_button(ElementId::Name(format!("tab-{tab:?}").into()), BTN_W, BTN_H, self.tab_is_on(tab), false, icon(path, w, h))
                 .mx(px(1.))
-                .child(icon(path, w, h))
                 .tooltip(theme::tooltip(tab.tooltip()))
                 .on_click(cx.listener(move |this, _, window, cx| this.click_tab(tab, window, cx)))
                 .on_mouse_down(
@@ -437,9 +436,8 @@ impl Overlay {
         let mut col = div().flex().flex_col();
         for (id, path, w, h, tip, on, item) in items {
             col = col.child(
-                theme::icon_button(id, BTN_W, BTN_H, on, false)
+                theme::icon_button(id, BTN_W, BTN_H, on, false, icon(path, w, h))
                     .mx(px(1.))
-                    .child(icon(path, w, h))
                     .tooltip(theme::tooltip(tip))
                     .on_click(cx.listener(move |this, _, _, cx| {
                         this.close_flyout();

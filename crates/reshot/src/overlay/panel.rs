@@ -474,8 +474,14 @@ impl Overlay {
         let preview_rgb = rgb(u32::from(color.r()) << 16 | u32::from(color.g()) << 8 | u32::from(color.b()));
         let (pw, pi) = theme::inset(theme::input_dark(), theme::input_light(), theme::input_bg());
         let armed = self.eyedropper_armed;
-        let eyedropper = theme::icon_button("eyedropper", 26., 22., armed, true)
-            .child(svg().path("icons/eyedropper.svg").size(px(14.)).text_color(theme::text()))
+        let eyedropper = theme::icon_button(
+            "eyedropper",
+            26.,
+            22.,
+            armed,
+            true,
+            svg().path("icons/eyedropper.svg").size(px(14.)).text_color(theme::text()),
+        )
             .tooltip(theme::tooltip(
                 "Color picker. Right-click and hold on the image to pick a colour. Click here to keep it armed until you right-click.",
             ))
