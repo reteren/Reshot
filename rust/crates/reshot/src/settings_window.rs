@@ -1,11 +1,12 @@
 //! Source VGUI settings dialog. A draft is applied only on OK or Apply.
 
 mod view;
+mod vgui;
 
 use crate::{app::ReshotApp, winutil};
 use gpui::{
     App, AppContext, AsyncApp, Bounds, Context, FocusHandle, Global, KeyDownEvent, Pixels, Point,
-    Window, WindowBackgroundAppearance, WindowBounds, WindowHandle, WindowKind, WindowOptions,
+    ScrollHandle, Window, WindowBackgroundAppearance, WindowBounds, WindowHandle, WindowKind, WindowOptions,
 };
 use reshot_core::hotkey::HotkeyDefinition;
 use reshot_core::settings::AppSettings;
@@ -54,6 +55,9 @@ impl Tab {
         Self::Audio,
         Self::Info,
     ];
+    fn from_name(name: &str) -> Option<Self> {
+        Self::ALL.into_iter().find(|t| t.label().eq_ignore_ascii_case(name))
+    }
     fn label(self) -> &'static str {
         match self {
             Self::General => "General",
@@ -123,6 +127,27 @@ pub struct SettingsWindow {
     status: String,
     last_print_screen: bool,
     slider_bounds: [Rc<Cell<Bounds<Pixels>>>; 3],
+    /// The Info tab's two independently scrolling columns.
+    scroll: [ScrollHandle; 2],
+    /// Whether each column overflowed at the last paint, which decides its scrollbar.
+    scroll_overflow: [Rc<Cell<bool>>; 2],
+    /// A scrollbar thumb being dragged: column, pointer y and offset at the press, and
+    /// thumb pixels per content pixel.
+    scroll_drag: Option<(usize, f32, f32, f32)>,
+}
+
+/// Opens the window on a tab named like its caption ("info"); an unknown name keeps the default.
+pub fn open_tab(cx: &mut App, tab: &str) {
+    open(cx);
+    let Some(tab) = Tab::from_name(tab) else {
+        return;
+    };
+    if let Some(handle) = cx.try_global::<SettingsState>().and_then(|s| s.handle) {
+        let _ = handle.update(cx, |this, _, cx| {
+            this.tab = tab;
+            cx.notify();
+        });
+    }
 }
 
 pub fn open(cx: &mut App) {
@@ -159,7 +184,8 @@ pub fn open(cx: &mut App) {
         is_movable: true,
         is_resizable: false,
         is_minimizable: false,
-        window_background: WindowBackgroundAppearance::Transparent,
+        // Acrylic under the translucent panel, as the webview window had.
+        window_background: WindowBackgroundAppearance::Blurred,
         ..Default::default()
     };
     let draft = cx.global::<ReshotApp>().settings.current().clone();
@@ -196,6 +222,9 @@ pub fn open(cx: &mut App) {
                 status: String::new(),
                 last_print_screen: false,
                 slider_bounds: Default::default(),
+                scroll: Default::default(),
+                scroll_overflow: Default::default(),
+                scroll_drag: None,
             }
         })
     }) {
@@ -209,6 +238,7 @@ pub fn open(cx: &mut App) {
     if let Ok(Some(hwnd)) = handle.update(cx, |_, window, _| winutil::hwnd(window)) {
         let raw = hwnd.0 as isize;
         winutil::after_update(cx, move || {
+            win::round_corners(win::hwnd(raw));
             win::force_foreground(win::hwnd(raw), false);
         });
     }
@@ -348,8 +378,12 @@ impl SettingsWindow {
             Slider::Corners => (self.draft.video.corners.opacity * 100.0).round() as i32,
         }
     }
+    fn slider_range(key: Slider) -> (i32, i32) {
+        if key == Slider::Quality { (1, 100) } else { (0, 100) }
+    }
     fn set_slider(&mut self, key: Slider, value: i32) {
-        let value = value.clamp(if key == Slider::Quality { 1 } else { 0 }, 100);
+        let (min, max) = Self::slider_range(key);
+        let value = value.clamp(min, max);
         match key {
             Slider::Dim => self.draft.dim.opacity = value as f64 / 100.0,
             Slider::Quality => self.draft.format.quality = value,
@@ -358,10 +392,14 @@ impl SettingsWindow {
         self.status.clear();
     }
     fn slider_from_point(&mut self, key: Slider, point: Point<Pixels>) {
+        // The thumb's centre follows the pointer; it travels the track's inside (1 px border
+        // each side) less its own 10 px.
         let bounds = self.slider_bounds[key as usize].get();
-        let width = f32::from(bounds.size.width).max(1.0);
-        let fraction = ((f32::from(point.x) - f32::from(bounds.origin.x)) / width).clamp(0.0, 1.0);
-        self.set_slider(key, (fraction * 100.0).round() as i32);
+        let travel = (f32::from(bounds.size.width) - 12.0).max(1.0);
+        let x = f32::from(point.x) - f32::from(bounds.origin.x) - 6.0;
+        let fraction = (x / travel).clamp(0.0, 1.0);
+        let (min, max) = Self::slider_range(key);
+        self.set_slider(key, min + (fraction * (max - min) as f32).round() as i32);
     }
     fn options(&self, key: Select) -> Vec<(String, String)> {
         match key {

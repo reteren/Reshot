@@ -100,12 +100,14 @@ pub fn init(
     resident: Resident,
     events: async_channel::Receiver<ShellEvent>,
     capture_now: bool,
+    settings_now: Option<String>,
 ) {
     let Resident { settings, shell, single, main_vk } = resident;
 
     // gpui on Windows quits when its last window closes. A tray utility has no window most of
     // the time, so one invisible window anchors the process for its whole life.
     open_anchor(cx);
+    crate::assets::register_fonts(cx);
 
     let app = ReshotApp {
         settings,
@@ -135,6 +137,12 @@ pub fn init(
     if capture_now {
         cx.spawn(async move |cx: &mut AsyncApp| {
             let _ = cx.update(|cx| capture(cx, "cli --capture"));
+        })
+        .detach();
+    }
+    if let Some(tab) = settings_now {
+        cx.spawn(async move |cx: &mut AsyncApp| {
+            let _ = cx.update(|cx| crate::settings_window::open_tab(cx, &tab));
         })
         .detach();
     }

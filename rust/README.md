@@ -19,6 +19,7 @@ the lessons learned on the way are in [ROADMAP-RUST.md](ROADMAP-RUST.md).
 ```
 cargo test --workspace
 cargo run -p reshot -- --capture
+cargo run -p reshot -- --settings=info   # settings window, optionally on a tab
 ```
 
 A debug build (and the `release-dev` profile) runs next to an installed Reshot without

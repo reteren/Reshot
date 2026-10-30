@@ -54,7 +54,15 @@ fn main() {
     // window, not at boot: until then the process is the tray, the hotkeys and nothing else.
     // The first press pays for the start-up, as the first WPF window did in the C# build.
     let capture_now = std::env::args().any(|a| a.eq_ignore_ascii_case("--capture"));
-    if !capture_now {
+    // `--settings` opens the settings window at once; `--settings=<tab>` picks the tab.
+    let settings_now = std::env::args().find_map(|a| {
+        let lower = a.to_ascii_lowercase();
+        lower.strip_prefix("--settings").and_then(|rest| match rest {
+            "" => Some(String::new()),
+            _ => rest.strip_prefix('=').map(str::to_string),
+        })
+    });
+    if !capture_now && settings_now.is_none() {
         match events_rx.recv_blocking() {
             Ok(first) => {
                 log::info!("Startup: first use ({first:?}); starting the UI.");
@@ -67,7 +75,7 @@ fn main() {
 
     let resident = app::Resident { settings, shell, single, main_vk };
     gpui::Application::new().with_assets(assets::Assets).run(move |cx| {
-        app::init(cx, resident, events_rx, capture_now);
+        app::init(cx, resident, events_rx, capture_now, settings_now);
     });
     log::info!("Shutdown complete.");
 }

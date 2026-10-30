@@ -19,3 +19,21 @@ impl AssetSource for Assets {
         Ok(<Assets as RustEmbed>::iter().filter(|p| p.starts_with(path)).map(SharedString::from).collect())
     }
 }
+
+/// Roboto 3.015, the exact face the settings dialog was designed in: the webview bundled it
+/// through @fontsource, whose per-script subsets are merged back into one file per weight.
+/// It is named "Reshot Roboto" so an older Roboto installed on the machine (2.x, with other
+/// kerning) never stands in for it.
+const ROBOTO: [&[u8]; 4] = [
+    include_bytes!("../assets/fonts/ReshotRoboto-Thin.ttf"),
+    include_bytes!("../assets/fonts/ReshotRoboto-Light.ttf"),
+    include_bytes!("../assets/fonts/ReshotRoboto-Regular.ttf"),
+    include_bytes!("../assets/fonts/ReshotRoboto-Bold.ttf"),
+];
+
+pub fn register_fonts(cx: &gpui::App) {
+    let fonts = ROBOTO.iter().map(|bytes| Cow::Borrowed(*bytes)).collect();
+    if let Err(e) = cx.text_system().add_fonts(fonts) {
+        log::error!("Fonts: could not register Roboto: {e:#}");
+    }
+}

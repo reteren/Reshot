@@ -15,3 +15,11 @@ The build scripts and package provenance are available from
 [BtbN/FFmpeg-Builds](https://github.com/BtbN/FFmpeg-Builds) and its
 [pinned release page](https://github.com/BtbN/FFmpeg-Builds/releases/tag/autobuild-2026-07-31-14-10).
 Accordingly, the corresponding source for the FFmpeg binary Reshot ships is available there.
+
+## Roboto
+
+The Rust build embeds Roboto 3.015 (Thin, Light, Regular and Bold), Copyright 2011 The
+Roboto Project Authors ([googlefonts/roboto-classic](https://github.com/googlefonts/roboto-classic)),
+licensed under the [SIL Open Font License, Version 1.1](https://openfontlicense.org). The
+files are the @fontsource/roboto 5.3.0 subsets merged into one file per weight and renamed
+"Reshot Roboto"; the glyphs are unchanged.

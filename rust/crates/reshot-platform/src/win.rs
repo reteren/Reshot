@@ -128,6 +128,27 @@ pub fn exclude_from_capture(hwnd: HWND, exclude: bool) {
     }
 }
 
+/// Asks DWM to round the window's own frame. The acrylic backdrop covers the whole window
+/// rectangle, so a panel drawn with rounded corners alone would leave square blurred wedges
+/// poking out past them; rounding the frame clips the backdrop to the same shape.
+pub fn round_corners(hwnd: HWND) {
+    use windows::Win32::Graphics::Dwm::{DWMWA_WINDOW_CORNER_PREFERENCE, DWMWCP_ROUND, DwmSetWindowAttribute};
+    let preference = DWMWCP_ROUND;
+    // SAFETY: hwnd belongs to this process; the attribute is a DWM_WINDOW_CORNER_PREFERENCE.
+    let result = unsafe {
+        DwmSetWindowAttribute(
+            hwnd,
+            DWMWA_WINDOW_CORNER_PREFERENCE,
+            &preference as *const _ as *const core::ffi::c_void,
+            std::mem::size_of_val(&preference) as u32,
+        )
+    };
+    // Windows 10 has no rounded frames; the panel's own corners are all it gets there.
+    if let Err(e) = result {
+        log::debug!("DWM corner preference unavailable: {e}");
+    }
+}
+
 /// Whether the foreground window belongs to another process and covers its whole screen: in
 /// practice a fullscreen or borderless game. Everything that touches global input state is
 /// gated on this, because against an ordinary desktop window there is nothing to fight for.
