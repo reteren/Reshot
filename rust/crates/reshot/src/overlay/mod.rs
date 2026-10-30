@@ -224,6 +224,7 @@ impl Overlay {
             let raw = h.0 as isize;
             winutil::after_update(cx, move || {
                 let h = win::hwnd(raw);
+                win::use_outlined_crosshair(h);
                 win::place_topmost(h, r);
                 if hide {
                     win::exclude_from_capture(h, true);

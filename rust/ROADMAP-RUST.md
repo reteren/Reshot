@@ -66,6 +66,5 @@ Each phase ends with something runnable.
 
 ## Deliberate deviations from the C# build
 
-- The overlay cursor is the system crosshair; gpui cannot show the C# build's outlined
-  custom crosshair.
-- Flyouts close instantly instead of fading out (they still rise in when opening).
+- None open. The outlined crosshair, which gpui cannot set, is restored by subclassing the
+  overlay window and swapping the stock crosshair on WM_SETCURSOR.

@@ -255,3 +255,95 @@ pub fn show(hwnd: HWND, visible: bool) {
         let _ = ShowWindow(hwnd, if visible { SW_SHOWNA } else { SW_HIDE });
     }
 }
+
+/// The overlay's crosshair: a white core inside a black outline, drawn here rather than the
+/// stock one, which is a single colour and disappears against a background of that colour.
+fn outlined_crosshair() -> Option<windows::Win32::UI::WindowsAndMessaging::HCURSOR> {
+    use std::sync::OnceLock;
+    use windows::Win32::Graphics::Gdi::{
+        BI_RGB, BITMAPINFO, BITMAPINFOHEADER, CreateBitmap, CreateDIBSection, DIB_RGB_COLORS, DeleteObject,
+    };
+    use windows::Win32::UI::WindowsAndMessaging::{CreateIconIndirect, HCURSOR, ICONINFO};
+    const SIZE: i32 = 32;
+    const HOT: i32 = 16;
+    // Built once: a cursor costs a GDI handle. Stored as an integer to be shareable.
+    static CURSOR: OnceLock<isize> = OnceLock::new();
+    let raw = *CURSOR.get_or_init(|| {
+        // SAFETY: plain GDI object creation; the bitmaps are freed once the icon owns copies.
+        unsafe {
+            let info = BITMAPINFO {
+                bmiHeader: BITMAPINFOHEADER {
+                    biSize: std::mem::size_of::<BITMAPINFOHEADER>() as u32,
+                    biWidth: SIZE,
+                    biHeight: -SIZE, // top-down
+                    biPlanes: 1,
+                    biBitCount: 32,
+                    biCompression: BI_RGB.0,
+                    ..Default::default()
+                },
+                ..Default::default()
+            };
+            let mut bits = std::ptr::null_mut();
+            let Ok(color) = CreateDIBSection(None, &info, DIB_RGB_COLORS, &mut bits, None, 0) else { return 0 };
+            let px = std::slice::from_raw_parts_mut(bits as *mut u32, (SIZE * SIZE) as usize);
+            for y in 0..SIZE {
+                for x in 0..SIZE {
+                    let (dx, dy) = (x - HOT, y - HOT);
+                    let arm = (-1..=1).contains(&dx) || (-1..=1).contains(&dy);
+                    let core = dx == 0 || dy == 0;
+                    px[(y * SIZE + x) as usize] = if !arm {
+                        0
+                    } else if core {
+                        0xFFFF_FFFF
+                    } else {
+                        0xFF00_0000
+                    };
+                }
+            }
+            // For a 32-bit cursor the alpha decides; the AND mask is all zeros.
+            let mask = CreateBitmap(SIZE, SIZE, 1, 1, None);
+            let icon = ICONINFO {
+                fIcon: false.into(),
+                xHotspot: HOT as u32,
+                yHotspot: HOT as u32,
+                hbmMask: mask,
+                hbmColor: color,
+            };
+            let cursor = CreateIconIndirect(&icon).map(|h| h.0 as isize).unwrap_or(0);
+            let _ = DeleteObject(color.into());
+            let _ = DeleteObject(mask.into());
+            cursor
+        }
+    });
+    (raw != 0).then_some(HCURSOR(raw as _))
+}
+
+/// Swaps the stock crosshair for the outlined one on `hwnd`. gpui sets its cursor from
+/// WM_SETCURSOR using the shared system crosshair; this subclass lets it do so and then
+/// replaces that one cursor, leaving every other shape (I-beam, resize, hand) alone.
+pub fn use_outlined_crosshair(hwnd: HWND) {
+    use windows::Win32::Foundation::{LPARAM, LRESULT, WPARAM};
+    use windows::Win32::UI::Shell::{DefSubclassProc, SetWindowSubclass};
+    use windows::Win32::UI::WindowsAndMessaging::{GetCursor, IDC_CROSS, LoadCursorW, SetCursor, WM_SETCURSOR};
+
+    unsafe extern "system" fn proc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM, _: usize, _: usize) -> LRESULT {
+        // SAFETY: forwarding to the original procedure, then querying cursors.
+        unsafe {
+            let r = DefSubclassProc(hwnd, msg, wp, lp);
+            if msg == WM_SETCURSOR
+                && let (Ok(cross), Some(ours)) = (LoadCursorW(None, IDC_CROSS), outlined_crosshair())
+                && GetCursor() == cross
+            {
+                SetCursor(Some(ours));
+            }
+            r
+        }
+    }
+    if outlined_crosshair().is_none() {
+        return; // not worth failing a capture over: the stock crosshair stays
+    }
+    // SAFETY: subclassing our own window on its own thread.
+    unsafe {
+        let _ = SetWindowSubclass(hwnd, Some(proc), 0x5245_5348, 0);
+    }
+}
