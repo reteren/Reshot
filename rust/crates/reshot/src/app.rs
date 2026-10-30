@@ -43,47 +43,85 @@ pub struct ReshotApp {
 
 impl Global for ReshotApp {}
 
+/// What `main` prepared before gpui started: the shell is up, the hotkeys are registered and
+/// the settings are loaded, so the tray works while no UI framework is loaded at all.
+pub struct Resident {
+    pub settings: SettingsService,
+    pub shell: Shell,
+    pub single: SingleInstance,
+    pub main_vk: u32,
+}
+
+/// Registers the hotkeys on the shell and returns the main key's virtual-key code (0 when
+/// it could not be parsed). Runs before gpui exists.
+pub fn register_startup_hotkeys(shell: &Shell, s: &AppSettings) -> u32 {
+    let vk = register_main(shell, &s.hotkey);
+    register_audio(shell, &s.audio_hotkey);
+    vk
+}
+
+fn register_main(shell: &Shell, text: &str) -> u32 {
+    match HotkeyDefinition::parse(text) {
+        Ok(def) => {
+            if let Err(e) = shell.register_hotkey(HotkeySlot::Main, &def) {
+                log::error!("{e}");
+                shell.show_balloon(
+                    "Reshot: hotkey unavailable",
+                    &format!("Could not register '{text}'. It may be in use by another app. Pick another in Settings."),
+                    BalloonIcon::Warning,
+                );
+            }
+            def.virtual_key
+        }
+        Err(e) => {
+            log::error!("Hotkey: cannot parse '{text}': {e}");
+            0
+        }
+    }
+}
+
+fn register_audio(shell: &Shell, text: &str) {
+    shell.unregister_hotkey(HotkeySlot::Audio);
+    if text.trim().is_empty() {
+        return;
+    }
+    match HotkeyDefinition::parse(text) {
+        Ok(def) => {
+            if let Err(e) = shell.register_hotkey(HotkeySlot::Audio, &def) {
+                log::error!("{e}");
+            }
+        }
+        Err(e) => log::error!("Audio hotkey: cannot parse '{text}': {e}"),
+    }
+}
+
 pub fn init(
     cx: &mut App,
-    mut settings: SettingsService,
-    shell: Shell,
-    single: SingleInstance,
+    resident: Resident,
     events: async_channel::Receiver<ShellEvent>,
     capture_now: bool,
 ) {
-    settings.load();
-    let s = settings.current().clone();
+    let Resident { settings, shell, single, main_vk } = resident;
 
     // gpui on Windows quits when its last window closes. A tray utility has no window most of
     // the time, so one invisible window anchors the process for its whole life.
     open_anchor(cx);
 
-    let mut app = ReshotApp {
+    let app = ReshotApp {
         settings,
         shell,
         _single: single,
         capture: Arc::new(ScreenCaptureService::new()),
         session: SessionStateMachine::new(),
         paused: false,
-        main_vk: 0,
+        main_vk,
         hold_detecting: false,
         press_generation: 0,
         capture_generation: 0,
         overlay: None,
         tray_menu: None,
     };
-    app.register_main_hotkey(&s.hotkey);
-    app.register_audio_hotkey(&s.audio_hotkey);
     cx.set_global(app);
-
-    // Off the UI thread: schtasks queries and the WinRT access request are slow, and the
-    // hotkey and tray are what the user is waiting for.
-    let (enabled, elevated) = (s.autostart, s.autostart_elevated);
-    cx.background_spawn(async move {
-        autostart::apply(enabled, elevated, false);
-        reshot_capture::request_borderless_access();
-    })
-    .detach();
 
     cx.spawn(async move |cx: &mut AsyncApp| {
         while let Ok(event) = events.recv().await {
@@ -100,7 +138,7 @@ pub fn init(
         })
         .detach();
     }
-    log::info!("Startup: ready (idle in tray).");
+    log::info!("UI started.");
 }
 
 fn open_anchor(cx: &mut App) {
@@ -121,35 +159,11 @@ impl gpui::Render for Anchor {
 
 impl ReshotApp {
     fn register_main_hotkey(&mut self, text: &str) {
-        match HotkeyDefinition::parse(text) {
-            Ok(def) => {
-                self.main_vk = def.virtual_key;
-                if let Err(e) = self.shell.register_hotkey(HotkeySlot::Main, &def) {
-                    log::error!("{e}");
-                    self.shell.show_balloon(
-                        "Reshot: hotkey unavailable",
-                        &format!("Could not register '{text}'. It may be in use by another app. Pick another in Settings."),
-                        BalloonIcon::Warning,
-                    );
-                }
-            }
-            Err(e) => log::error!("Hotkey: cannot parse '{text}': {e}"),
-        }
+        self.main_vk = register_main(&self.shell, text);
     }
 
     fn register_audio_hotkey(&mut self, text: &str) {
-        self.shell.unregister_hotkey(HotkeySlot::Audio);
-        if text.trim().is_empty() {
-            return;
-        }
-        match HotkeyDefinition::parse(text) {
-            Ok(def) => {
-                if let Err(e) = self.shell.register_hotkey(HotkeySlot::Audio, &def) {
-                    log::error!("{e}");
-                }
-            }
-            Err(e) => log::error!("Audio hotkey: cannot parse '{text}': {e}"),
-        }
+        register_audio(&self.shell, text);
     }
 }
 

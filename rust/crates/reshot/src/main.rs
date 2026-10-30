@@ -38,10 +38,36 @@ fn main() {
             return;
         }
     };
-    let capture_now = std::env::args().any(|a| a.eq_ignore_ascii_case("--capture"));
+    let mut settings = SettingsService::default();
+    let s = settings.load().clone();
+    let main_vk = app::register_startup_hotkeys(&shell, &s);
 
+    // Off the main thread: schtasks queries and the WinRT access request are slow.
+    let (enabled, elevated) = (s.autostart, s.autostart_elevated);
+    std::thread::spawn(move || {
+        reshot_platform::autostart::apply(enabled, elevated, false);
+        reshot_capture::request_borderless_access();
+    });
+    log::info!("Startup: ready (idle in tray).");
+
+    // gpui (Direct3D, DirectWrite, its executors) is started by the first thing that needs a
+    // window, not at boot: until then the process is the tray, the hotkeys and nothing else.
+    // The first press pays for the start-up, as the first WPF window did in the C# build.
+    let capture_now = std::env::args().any(|a| a.eq_ignore_ascii_case("--capture"));
+    if !capture_now {
+        match events_rx.recv_blocking() {
+            Ok(first) => {
+                log::info!("Startup: first use ({first:?}); starting the UI.");
+                // Handed back so the UI handles it like any other event.
+                let _ = shell.event_sender().try_send(first);
+            }
+            Err(_) => return,
+        }
+    }
+
+    let resident = app::Resident { settings, shell, single, main_vk };
     gpui::Application::new().with_assets(assets::Assets).run(move |cx| {
-        app::init(cx, SettingsService::default(), shell, single, events_rx, capture_now);
+        app::init(cx, resident, events_rx, capture_now);
     });
     log::info!("Shutdown complete.");
 }

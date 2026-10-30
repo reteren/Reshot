@@ -64,6 +64,12 @@ Each phase ends with something runnable.
 - **Debug builds** use their own single-instance names and `reshot-dev.log`, and never touch
   autostart, so they run next to an installed Reshot without disturbing it.
 
+- **Idle memory**: gpui creates its Direct3D device and DirectWrite factory when it starts,
+  about 60 MB of working set. So gpui starts on first use (hotkey, tray, second launch);
+  until then the process is the tray thread and the hotkeys: measured 20.8 MB working set,
+  3.9 MB private, 0 CPU. The first press after boot pays the UI start, as the first WPF
+  window did in the C# build.
+
 ## Deliberate deviations from the C# build
 
 - None open. The outlined crosshair, which gpui cannot set, is restored by subclassing the
