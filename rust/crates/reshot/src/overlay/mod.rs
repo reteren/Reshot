@@ -722,7 +722,9 @@ impl Overlay {
         // chord such as Ctrl+Shift+Z.
         let pressed = e.modifiers.shift && !self.shift_down;
         self.shift_down = e.modifiers.shift;
-        if pressed && !e.modifiers.control && self.mode != Mode::Select && !self.editor.is_typing() {
+        // Shift is a plain modifier while typing into the text, the hex field or the font search.
+        let typing = self.editor.is_typing() || self.panel.has_field();
+        if pressed && !e.modifiers.control && self.mode != Mode::Select && !typing {
             self.toggle_panel(cx);
         }
     }

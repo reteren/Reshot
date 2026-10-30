@@ -176,6 +176,11 @@ impl PanelState {
         (if opening { e } else { 1.0 - e }, true)
     }
 
+    /// Whether a text field (hex, font search) holds the keyboard.
+    pub fn has_field(&self) -> bool {
+        self.field.is_some()
+    }
+
     /// A click on the canvas takes the keys back from the hex field or the font search.
     pub fn blur_fields(&mut self) {
         self.field = None;
