@@ -3,7 +3,16 @@
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and this
 project adheres to [Semantic Versioning](https://semver.org/).
 
-## [1.2.5] - Unreleased
+## [1.2.6] - Unreleased
+
+### Fixed
+
+- The toolbar icons sit inside their buttons again; they had dropped below the toolbar.
+- The screen no longer shifts a few pixels right and down while a capture is open. The
+  frozen frame, the radial menu and the recording HUD were all drawn 8 px right and 1 px
+  down of where they belonged.
+
+## [1.2.5] - Unreleased (test build)
 
 ### Changed
 
