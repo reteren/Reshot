@@ -34,9 +34,9 @@ Each phase ends with something runnable.
 | R4 | `reshot-ocr` | Codex | done |
 | R5 | `reshot-platform`: hotkey, tap/hold, tray, single instance, autostart, clipboard | Claude | done |
 | R6 | App shell: tray menu window, capture → overlay with rectangular selection, copy/save | Claude | done |
-| R7 | Overlay parity: all selection shapes, toolbar + flyouts, drawing, erasers, effects, text, eyedropper, undo, OCR layer | Claude | in progress |
-| R8 | Recording UI: REC HUD, corner brackets, audio-track prompt, radial menu | Codex | in progress |
-| R9 | Settings window in gpui (replaces Tauri) | Claude | |
+| R7 | Overlay parity: all selection shapes, toolbar + flyouts, drawing, erasers, effects, text, eyedropper, undo, OCR layer | Claude | built, awaiting manual test |
+| R8 | Recording UI: REC HUD, corner brackets, audio-track prompt, radial menu | Codex | built, awaiting manual test |
+| R9 | Settings window in gpui (replaces Tauri) | Codex + Claude | built, awaiting manual test |
 | R10 | Release: build script, installer, portable zip, version bump; delete C# + Tauri | Claude | |
 
 ## Rules for everyone working here

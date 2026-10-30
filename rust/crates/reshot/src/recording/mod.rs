@@ -1,7 +1,5 @@
 //! Recording orchestration lives apart from the app shell so the video and audio recorders,
 //! the visible HUD, and the post-recording track choice share one lifetime.
-// The app shell wires these entry points in the parallel integration pass.
-#![allow(dead_code)]
 
 mod corners;
 mod hud;
@@ -18,10 +16,11 @@ use gpui::{App, AsyncApp, Global, WindowHandle};
 use reshot_capture::ScreenCaptureService;
 use reshot_core::settings::VideoCornersSettings;
 use reshot_core::{filename, paths};
+use reshot_platform::shell::BalloonIcon;
 use reshot_platform::win::{self, PxRect};
 use reshot_recording::{AudioRecorder, AudioSources, Ffmpeg, VideoRecorder};
 
-use crate::app::ReshotApp;
+use crate::app::{self, ReshotApp};
 use hud::HudWindows;
 use track_prompt::{Decision, TrackPrompt};
 
@@ -93,6 +92,12 @@ pub fn start_video_with(
     }
     if !Ffmpeg::is_available() {
         log::error!("Recording unavailable: {}", Ffmpeg::missing_message());
+        app::balloon(
+            cx,
+            "Reshot: recording unavailable",
+            &Ffmpeg::missing_message(),
+            BalloonIcon::Error,
+        );
         return;
     }
 
@@ -104,6 +109,12 @@ pub fn start_video_with(
     };
     if let Err(error) = fs::create_dir_all(&directory) {
         log::error!("Recording folder: {error}");
+        app::balloon(
+            cx,
+            "Reshot: recording unavailable",
+            &format!("Cannot create recording folder: {error}"),
+            BalloonIcon::Error,
+        );
         return;
     }
     let path = directory.join(filename::build(
@@ -165,6 +176,12 @@ pub fn start_audio(cx: &mut App, sources: AudioSources) {
     }
     if !Ffmpeg::is_available() {
         log::error!("Audio recording unavailable: {}", Ffmpeg::missing_message());
+        app::balloon(
+            cx,
+            "Reshot: audio unavailable",
+            &Ffmpeg::missing_message(),
+            BalloonIcon::Error,
+        );
         return;
     }
     let settings = cx.global::<ReshotApp>().settings.current().clone();
@@ -175,6 +192,12 @@ pub fn start_audio(cx: &mut App, sources: AudioSources) {
     };
     if let Err(error) = fs::create_dir_all(&directory) {
         log::error!("Audio recording folder: {error}");
+        app::balloon(
+            cx,
+            "Reshot: audio unavailable",
+            &format!("Cannot create recording folder: {error}"),
+            BalloonIcon::Error,
+        );
         return;
     }
     let path = directory.join(filename::build(
@@ -231,7 +254,7 @@ fn complete_start(cx: &mut App, serial: u64) -> bool {
         }) if id == serial => match receiver.try_recv() {
             Ok(Ok(recorder)) if stop_requested => {
                 let (system, mic) = (recorder.has_system_track, recorder.has_mic_track);
-                finish_video(Box::new(recorder), system, mic);
+                finish_video(cx, Box::new(recorder), system, mic);
             }
             Ok(Ok(recorder)) => {
                 let region = corners.enabled.then_some(rect);
@@ -243,14 +266,35 @@ fn complete_start(cx: &mut App, serial: u64) -> bool {
                     cx,
                 );
                 log::info!("Recording started: {}", recorder.path.display());
+                let hotkey = cx.global::<ReshotApp>().settings.current().hotkey.clone();
+                app::balloon(
+                    cx,
+                    "Reshot: recording",
+                    &format!("Recording started. Press {hotkey} to stop."),
+                    BalloonIcon::Info,
+                );
                 state(cx).active = Some(Active::Video {
                     recorder: Box::new(recorder),
                     hud,
                 });
             }
-            Ok(Err(error)) => log::error!("Recording failed to start: {error:#}"),
+            Ok(Err(error)) => {
+                log::error!("Recording failed to start: {error:#}");
+                app::balloon(
+                    cx,
+                    "Reshot: recording failed",
+                    &format!("{error:#}"),
+                    BalloonIcon::Error,
+                );
+            }
             Err(TryRecvError::Disconnected) => {
-                log::error!("Recording startup worker terminated unexpectedly")
+                log::error!("Recording startup worker terminated unexpectedly");
+                app::balloon(
+                    cx,
+                    "Reshot: recording failed",
+                    "Recording startup worker terminated unexpectedly.",
+                    BalloonIcon::Error,
+                );
             }
             Err(TryRecvError::Empty) => {
                 state(cx).active = Some(Active::StartingVideo {
@@ -268,22 +312,44 @@ fn complete_start(cx: &mut App, serial: u64) -> bool {
             stop_requested,
             receiver,
         }) if id == serial => match receiver.try_recv() {
-            Ok(Ok(mut recorder)) if stop_requested => {
-                if let Err(error) = recorder.stop() {
-                    log::error!("Audio recording save failed: {error:#}");
-                }
-            }
+            Ok(Ok(recorder)) if stop_requested => finish_audio(cx, recorder),
             Ok(Ok(recorder)) => {
                 let hud = HudWindows::open("Audio".into(), None, "#FF0000", 1.0, cx);
                 log::info!("Audio recording started: {}", recorder.path.display());
+                let settings = cx.global::<ReshotApp>().settings.current();
+                let hotkey = if settings.audio_hotkey.is_empty() {
+                    settings.hotkey.clone()
+                } else {
+                    settings.audio_hotkey.clone()
+                };
+                app::balloon(
+                    cx,
+                    "Reshot: audio recording",
+                    &format!("Audio recording started. Press {hotkey} to stop."),
+                    BalloonIcon::Info,
+                );
                 state(cx).active = Some(Active::Audio {
                     recorder: Box::new(recorder),
                     hud,
                 });
             }
-            Ok(Err(error)) => log::error!("Audio recording failed to start: {error:#}"),
+            Ok(Err(error)) => {
+                log::error!("Audio recording failed to start: {error:#}");
+                app::balloon(
+                    cx,
+                    "Reshot: audio recording failed",
+                    &format!("{error:#}"),
+                    BalloonIcon::Error,
+                );
+            }
             Err(TryRecvError::Disconnected) => {
-                log::error!("Audio startup worker terminated unexpectedly")
+                log::error!("Audio startup worker terminated unexpectedly");
+                app::balloon(
+                    cx,
+                    "Reshot: audio recording failed",
+                    "Recording startup worker terminated unexpectedly.",
+                    BalloonIcon::Error,
+                );
             }
             Err(TryRecvError::Empty) => {
                 state(cx).active = Some(Active::StartingAudio {
@@ -373,27 +439,71 @@ pub fn stop(cx: &mut App) {
                     );
                 }
             } else {
-                finish_video(recorder, has_system, has_mic);
+                finish_video(cx, recorder, has_system, has_mic);
             }
         }
-        Some(Active::Audio { mut recorder, hud }) => {
+        Some(Active::Audio { recorder, hud }) => {
             if let Some(hud) = hud {
                 hud.close(cx);
             }
-            match recorder.stop() {
-                Ok(()) => log::info!("Audio recording saved: {}", recorder.path.display()),
-                Err(error) => log::error!("Audio recording save failed: {error:#}"),
-            }
+            finish_audio(cx, *recorder);
         }
         None => {}
     }
 }
 
-fn finish_video(mut recorder: Box<VideoRecorder>, keep_system: bool, keep_mic: bool) {
+fn finish_video(cx: &App, mut recorder: Box<VideoRecorder>, keep_system: bool, keep_mic: bool) {
     match recorder.finish(keep_system, keep_mic) {
-        Ok(true) => log::info!("Recording saved: {}", recorder.path.display()),
-        Ok(false) => log::error!("Recording could not be saved: {}", recorder.path.display()),
-        Err(error) => log::error!("Recording save failed: {error:#}"),
+        Ok(true) => {
+            log::info!("Recording saved: {}", recorder.path.display());
+            app::balloon(
+                cx,
+                "Reshot: recording saved",
+                &recorder.path.display().to_string(),
+                BalloonIcon::Info,
+            );
+        }
+        Ok(false) => {
+            log::error!("Recording could not be saved: {}", recorder.path.display());
+            app::balloon(
+                cx,
+                "Reshot: recording save failed",
+                &recorder.path.display().to_string(),
+                BalloonIcon::Error,
+            );
+        }
+        Err(error) => {
+            log::error!("Recording save failed: {error:#}");
+            app::balloon(
+                cx,
+                "Reshot: recording save failed",
+                &format!("{error:#}"),
+                BalloonIcon::Error,
+            );
+        }
+    }
+}
+
+fn finish_audio(cx: &App, mut recorder: AudioRecorder) {
+    match recorder.stop() {
+        Ok(()) => {
+            log::info!("Audio recording saved: {}", recorder.path.display());
+            app::balloon(
+                cx,
+                "Reshot: audio saved",
+                &recorder.path.display().to_string(),
+                BalloonIcon::Info,
+            );
+        }
+        Err(error) => {
+            log::error!("Audio recording save failed: {error:#}");
+            app::balloon(
+                cx,
+                "Reshot: audio save failed",
+                &format!("{error:#}"),
+                BalloonIcon::Error,
+            );
+        }
     }
 }
 
@@ -406,7 +516,12 @@ fn decide(id: u64, decision: Decision, cx: &mut App) {
         app.settings.current_mut().video.audio.ask_on_save = false;
         app.settings.save();
     }
-    finish_video(pending.recorder, decision.keep_system, decision.keep_mic);
+    finish_video(
+        cx,
+        pending.recorder,
+        decision.keep_system,
+        decision.keep_mic,
+    );
 }
 
 /// Called by the app's exit path so a modeless track prompt cannot strand its take.
@@ -417,17 +532,13 @@ pub fn shutdown(cx: &mut App) {
         Some(Active::StartingVideo { receiver, .. }) => match receiver.recv() {
             Ok(Ok(recorder)) => {
                 let (system, mic) = (recorder.has_system_track, recorder.has_mic_track);
-                finish_video(Box::new(recorder), system, mic);
+                finish_video(cx, Box::new(recorder), system, mic);
             }
             Ok(Err(error)) => log::error!("Recording startup on exit: {error:#}"),
             Err(error) => log::error!("Recording startup on exit: {error}"),
         },
         Some(Active::StartingAudio { receiver, .. }) => match receiver.recv() {
-            Ok(Ok(mut recorder)) => {
-                if let Err(error) = recorder.stop() {
-                    log::error!("Audio save on exit: {error:#}");
-                }
-            }
+            Ok(Ok(recorder)) => finish_audio(cx, recorder),
             Ok(Err(error)) => log::error!("Audio startup on exit: {error:#}"),
             Err(error) => log::error!("Audio startup on exit: {error}"),
         },
@@ -437,15 +548,13 @@ pub fn shutdown(cx: &mut App) {
             }
             let (system, mic) = (recorder.has_system_track, recorder.has_mic_track);
             let _ = recorder.stop();
-            finish_video(recorder, system, mic);
+            finish_video(cx, recorder, system, mic);
         }
-        Some(Active::Audio { mut recorder, hud }) => {
+        Some(Active::Audio { recorder, hud }) => {
             if let Some(hud) = hud {
                 hud.close(cx);
             }
-            if let Err(error) = recorder.stop() {
-                log::error!("Audio save on exit: {error:#}");
-            }
+            finish_audio(cx, *recorder);
         }
         None => {}
     }
@@ -456,7 +565,7 @@ pub fn shutdown(cx: &mut App) {
         }
         let keep_system = take.recorder.has_system_track;
         let keep_mic = take.recorder.has_mic_track;
-        finish_video(take.recorder, keep_system, keep_mic);
+        finish_video(cx, take.recorder, keep_system, keep_mic);
     }
 }
 

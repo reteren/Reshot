@@ -8,7 +8,7 @@ use gpui::{App, AppContext, AsyncApp, Global, WindowHandle};
 use reshot_capture::ScreenCaptureService;
 use reshot_core::hotkey::HotkeyDefinition;
 use reshot_core::session::{SessionState, SessionStateMachine};
-use reshot_core::settings::SettingsService;
+use reshot_core::settings::{AppSettings, SettingsService};
 use reshot_platform::shell::{BalloonIcon, HotkeySlot, Shell, ShellEvent};
 use reshot_platform::single_instance::SingleInstance;
 use reshot_platform::{autostart, win};
@@ -170,6 +170,10 @@ fn on_shell_event(event: ShellEvent, cx: &mut App) {
 /// the radial menu. Telling them apart needs key-up, which RegisterHotKey does not give, so
 /// the key is polled while it is held, and only then.
 fn on_hotkey(cx: &mut App) {
+    // The settings window is recording a new binding: the press is its input, not a capture.
+    if crate::settings_window::is_capturing_hotkey(cx) {
+        return;
+    }
     let recording = crate::recording::is_active(cx);
     let app = cx.global::<ReshotApp>();
     // Logged before every guard below: each is a silent return, and this line tells "the
@@ -310,11 +314,56 @@ pub fn set_paused(cx: &mut App, paused: bool) {
     app.paused = paused;
     if paused {
         app.shell.unregister_hotkey(HotkeySlot::Main);
-        log::info!("Hotkey paused from the tray.");
+        app.shell.show_balloon("Reshot", "Hotkey paused.", BalloonIcon::Info);
+        log::info!("Hotkey paused by user.");
     } else {
         let hotkey = app.settings.current().hotkey.clone();
         app.register_main_hotkey(&hotkey);
+        app.shell.show_balloon("Reshot", "Hotkey resumed.", BalloonIcon::Info);
+        log::info!("Hotkey resumed by user.");
     }
+}
+
+/// Persists settings from the settings window and re-applies the ones that act live.
+pub fn apply_settings(cx: &mut App, updated: AppSettings) {
+    let app = cx.global_mut::<ReshotApp>();
+    let old = app.settings.current().clone();
+    app.settings.update(updated.clone());
+    if !old.audio_hotkey.eq_ignore_ascii_case(&updated.audio_hotkey) {
+        app.register_audio_hotkey(&updated.audio_hotkey);
+    }
+    // A paused hotkey stays paused; it picks up the new binding on resume.
+    if !app.paused && !old.hotkey.eq_ignore_ascii_case(&updated.hotkey) {
+        app.shell.unregister_hotkey(HotkeySlot::Main);
+        app.register_main_hotkey(&updated.hotkey);
+    }
+    log::info!("Settings updated from the settings window.");
+
+    if old.autostart == updated.autostart && old.autostart_elevated == updated.autostart_elevated {
+        return;
+    }
+    // The elevated lane may raise UAC and wait on schtasks, so it runs off the UI thread.
+    let (enabled, wanted) = (updated.autostart, updated.autostart_elevated);
+    cx.spawn(async move |cx: &mut AsyncApp| {
+        let elevated = cx.background_spawn(async move { autostart::apply(enabled, wanted, true) }).await;
+        if elevated == wanted {
+            return;
+        }
+        // The checkbox must not claim something Windows never agreed to.
+        let _ = cx.update(|cx| {
+            let app = cx.global_mut::<ReshotApp>();
+            app.settings.current_mut().autostart_elevated = elevated;
+            app.settings.save();
+            if !elevated {
+                app.shell.show_balloon(
+                    "Reshot: starting normally",
+                    "Administrator rights were not granted, so Reshot will start with Windows without them. Overlays over elevated applications will not work.",
+                    BalloonIcon::Warning,
+                );
+            }
+        });
+    })
+    .detach();
 }
 
 pub fn open_settings(cx: &mut App) {
