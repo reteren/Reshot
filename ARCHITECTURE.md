@@ -1,74 +1,65 @@
 # Reshot architecture
 
-## 1. Stack: C# / .NET 8
+## 1. Stack: Rust
 
-**Decision: C# rather than Rust.** The project is written together with an AI assistant by
-an author without deep programming experience, and C# wins on every criterion that matters
-for that situation:
+**Decision: Rust, as of 1.2.5.** Reshot was written in C# / .NET 8 with WPF up to 1.2.4,
+with the settings window as a separate Tauri application. It was rewritten in Rust, feature
+for feature and pixel for pixel (the record of how is [docs/rust-rewrite.md](docs/rust-rewrite.md)),
+for three reasons:
 
-- Compiler and runtime errors are readable and easy to feed back into the assistant. In
-  Rust, fighting the borrow checker as a beginner stretches every phase severalfold.
-- There is a huge amount of open source to learn from. **ShareX** (C#) is effectively a
-  reference implementation of half of Reshot.
-- First-class access to the Windows API: Windows.Graphics.Capture, DXGI Desktop
-  Duplication, WASAPI, the registry, the tray. All of it is either in the BCL or one NuGet
-  away.
-- Performance is more than sufficient. The frame is frozen, so editing is operations on a
-  single bitmap rather than a GPU render every frame.
+- **One UI technology instead of two.** The overlay was WPF and the settings window a
+  WebView2 page in another process; the Half-Life 2 / Source look had to be built twice and
+  kept in step twice. Now every window is gpui.
+- **Idle cost.** The resident process is the tray thread and the hotkeys and nothing else:
+  about 21 MB of working set and 0% CPU, with no runtime and no UI framework loaded until
+  the first press (§7).
+- **One executable.** No .NET runtime published beside it, no second binary for the settings.
 
-The tradeoff is accepted honestly: roughly 40 to 60 MB of RAM during an active editing
-session and 25 to 30 MB in the background. That is normal for a utility, and the "under
-30 MB idle" goal is reachable because WPF is not loaded until the first call (see §7).
+The same Skia renders the image as before (SkiaSharp then, `skia-safe` now), so documents,
+erasers and exports produce the same pixels.
 
 ### Components
 
 | Layer | Technology | Why |
 |---|---|---|
-| Runtime | .NET 8 (self-contained, win-x64) | One installer, no runtime prerequisite |
-| Overlay and UI | WPF (a borderless topmost window per stage) | Mature, flexible, easy to style dark |
-| Editor canvas | **SkiaSharp** (`SKElement`) | Brushes, alpha, blur, pixelation, arbitrary paths and text, all in one library |
-| Screen capture | **DXGI Desktop Duplication** for snapshots, **Windows.Graphics.Capture** for recording and as the snapshot fallback | See §6: duplication hands back a desktop that never had a cursor in it, WGC has to switch the cursor off to match and that blinks |
-| Global hotkey | `RegisterHotKey` (user32, P/Invoke) | Zero background cost: the message arrives in the message loop |
-| Tray | `NotifyIcon` (WinForms interop) | Standard |
-| Settings | `System.Text.Json` writing `%AppData%\reshot\settings.json` | Shared with the settings window |
-| Settings window | **Tauri 2** (Rust + TypeScript), a separate process | Styling the Source-like dialog in HTML and CSS beats fighting WPF for it |
-| Video | A bundled ffmpeg: BGRA frames piped in as rawvideo, H.264 encode (`h264_nvenc` / `h264_amf` / `h264_qsv` when available, `libx264` otherwise), AAC encode and final mux; WASAPI through NAudio for the audio capture | Bundled ffmpeg costs about 145 MB per artifact and brings a GPL licence obligation (§9) |
+| Language | Rust 2024, MSVC toolchain, x64 | One native executable |
+| Every window | **gpui** (Zed's UI framework): overlay, toolbar, radial menu, tray menu, recording HUD, audio-track prompt, settings | GPU-drawn, fully stylable; the VGUI bevels are plain elements |
+| Editor canvas | **Skia** through `skia-safe` (prebuilt) | Brushes, alpha, blur, pixelation, arbitrary paths and text, all in one library |
+| Screen capture | **DXGI Desktop Duplication** for snapshots, **Windows.Graphics.Capture** for recording and as the snapshot fallback, through the `windows` crate | See §6: duplication hands back a desktop that never had a cursor in it, WGC has to switch the cursor off to match and that blinks |
+| Global hotkey and tray | `RegisterHotKey` and `Shell_NotifyIcon` on a message-only window, on their own thread | Zero background cost: the message arrives in a message loop |
+| Settings | `serde_json` writing `%AppData%\reshot\settings.json` | The key names are the ones 1.2.4 wrote, so an upgrade keeps them |
+| Video | A bundled ffmpeg: BGRA frames piped in as rawvideo, H.264 encode (`h264_nvenc` / `h264_amf` / `h264_qsv` when available, `libx264` otherwise), AAC encode and final mux; WASAPI through the `wasapi` crate for the audio capture | Bundled ffmpeg costs about 145 MB per artifact and brings a GPL licence obligation (§9) |
 | Text recognition | `Windows.Media.Ocr` | Offline, no models to ship, already part of the OS |
+| Settings dialog font | Roboto 3.015, embedded | The dialog is laid out to the pixel of the 1.2.4 webview, which used it |
 
-### Key NuGet packages
-
-```
-SkiaSharp
-SkiaSharp.Views.WPF
-Vortice.Direct3D11        (capture)
-NAudio                    (audio)
-```
-
-## 2. Solution layout
+## 2. Workspace layout
 
 ```
 reshot/
-├── src/
-│   ├── Reshot.App/            WPF: entry point, tray, hotkeys, overlay, OCR, export
-│   │   ├── Overlay/           session window, toolbar, tool panels
-│   │   ├── Ocr/               recognition and the selectable text layer
-│   │   ├── Radial/            hold-to-open quick menu
-│   │   ├── Recording/         recording HUD, audio track prompt
-│   │   └── Tray/
-│   ├── Reshot.Core/           no UI dependencies: document model, tools, history
-│   │   ├── Document/
-│   │   ├── Tools/
-│   │   ├── History/
-│   │   └── Export/
-│   ├── Reshot.Capture/        Windows.Graphics.Capture wrapper
-│   ├── Reshot.Recording/      ffmpeg shell-out plus WASAPI
-│   └── reshot-tauri/          settings window (Tauri 2)
-├── build/                     release scripts and the installer
-└── tests/Reshot.Core.Tests/
+├── crates/
+│   ├── reshot/              the application: composition root and every window (gpui)
+│   │   └── src/
+│   │       ├── overlay/     session window, toolbar, tool panels, OCR layer
+│   │       ├── recording/   recording HUD, corner brackets, audio-track prompt
+│   │       ├── settings_window/
+│   │       ├── radial.rs    hold-to-open quick menu
+│   │       └── tray_menu.rs
+│   ├── reshot-core/         no windows: document, tools, history, selections, editor,
+│   │                        export, settings, hotkeys, session state machine, fonts, log
+│   ├── reshot-capture/      Desktop Duplication + Windows.Graphics.Capture
+│   ├── reshot-recording/    ffmpeg process and arguments, WASAPI, PCM tracks, mux
+│   ├── reshot-ocr/          Windows.Media.Ocr
+│   └── reshot-platform/     tray and hotkeys thread, single instance, autostart, clipboard
+├── build/                   release script and the installer
+└── docs/
 ```
 
-Rule: **Reshot.Core knows nothing about WPF.** Every tool and the document model are
-testable without windows.
+Rules:
+
+- **`reshot-core` knows nothing about windows or Win32.** Every tool, the document model and
+  the editing session are testable without a display.
+- **D3D, DXGI and WGC live only in `reshot-capture`**; the rest sees `ScreenCaptureService`.
+- **Only `reshot-recording` builds an ffmpeg command line.**
 
 ## 3. Document model
 
@@ -99,23 +90,23 @@ paths, with everything outside those paths transparent.
 
 ### Fonts
 
-`Reshot.Core/Tools/FontCatalog.cs` is the single place that enumerates the installed
-families and turns a family name into an `SKTypeface`. Everything that draws or measures
+`reshot-core/src/fonts.rs` is the single place that enumerates the installed families and
+turns a family name into a Skia `Typeface`. Everything that draws or measures
 text goes through it — the text object, the caret the overlay draws while typing, the
-picker in the tool panel — and nothing else calls `SKTypeface.FromFamilyName`, so a name
+picker in the tool panel — and nothing else asks Skia for a typeface by name, so a name
 is resolved and cached once, and an unknown one falls back to Segoe UI in exactly one
 place. The catalogue is built lazily and off the UI thread, because enumerating every
 installed family is slow enough to be felt on the first click.
 
-It lives in Core rather than in the WPF layer for the reason at the end of §2: Core owns
+It lives in core rather than in the UI crate for the reason at the end of §2: core owns
 rendering and knows nothing about windows, and the same typeface has to serve both the
 Skia canvas and the family name stored in the settings model.
 
-The trap worth knowing about: the picker's list is rendered by **WPF**, which quietly
+The trap worth knowing about: the picker's list is rendered by **gpui** (DirectWrite), which quietly
 substitutes another font for glyphs the chosen family does not have, while the screenshot
 is rendered by **Skia**, which does not substitute anything. A Latin-only family therefore
 previews Cyrillic perfectly and then draws it as empty boxes on the image. That asymmetry
-is why `FontEntry` carries `SupportsCyrillic` and why the picker dims those rows — the
+is why `FontEntry` carries `supports_cyrillic` and why the picker dims those rows — the
 preview cannot be trusted to show the failure by itself.
 
 ## 4. Erasers: the strength model
@@ -133,8 +124,8 @@ alpha(r) = falloff(r, hardness)   towards the rim
 
 Implementation: the stroke is rasterised into a greyscale **coverage bitmap** whose
 luminance is the erase strength. Overlapping stamps along the stroke are combined with
-`SKBlendMode.Lighten`, taking the maximum rather than accumulating, and the finished
-coverage is applied to the layer once with `SKBlendMode.DstOut`. Stamping semi-transparent
+`BlendMode::Lighten`, taking the maximum rather than accumulating, and the finished
+coverage is applied to the layer once with `BlendMode::DstOut`. Stamping semi-transparent
 discs directly would compound along the stroke and erase the middle of a soft line fully.
 
 ## 5. Undo and redo
@@ -169,7 +160,7 @@ on very large strokes.
   arise the same way.
 - The overlay is one borderless window spanning the whole virtual desktop.
 - The freeze runs **on a worker thread**, not the UI thread: device creation plus the wait
-  for the first frame is the bulk of the hotkey-to-overlay time, and holding the dispatcher
+  for the first frame is the bulk of the hotkey-to-overlay time, and holding the UI thread
   for it froze the app instead of merely delaying it.
 - It starts only once the press is known to be a **tap**. Starting it on key-down instead,
   in parallel with hold detection, is tempting — it saves the user's own key-hold time —
@@ -192,10 +183,12 @@ on very large strokes.
 
 ## 7. Zero background cost
 
-- The background process is a message-only window plus `RegisterHotKey` plus the tray. No
-  timers, no polling, no watchers.
-- The WPF overlay is **not created at startup**. It is constructed on the first hotkey, so
-  the first call is about 100 ms slower.
+- The background process is a message-only window plus `RegisterHotKey` plus the tray, on
+  their own thread. No timers, no polling, no watchers.
+- **gpui is not started at startup.** Its Direct3D device and DirectWrite factory cost about
+  60 MB of working set, so the UI starts on first use (hotkey, tray, a second launch) and
+  the first press is that much slower, as the first WPF window was in the C# build.
+  Measured idle before that: 20.8 MB working set, 3.9 MB private, 0 CPU.
 - Every capture resource (D3D device, frame pool) is released when the session closes.
 
 ## 8. Input routing
@@ -222,7 +215,7 @@ Editing → Recording → Idle
   encode — hardware `h264_nvenc` / `h264_amf` / `h264_qsv` when available, `libx264`
   otherwise — the AAC encode and the final mux.
 - The frames are piped rather than letting ffmpeg capture the screen itself (ddagrab)
-  because everything that makes a Reshot recording what it is lives on the C# side and
+  because everything that makes a Reshot recording what it is lives on Reshot's side and
   cannot survive a capture owned by ffmpeg: the selection can be any shape, so the mask is
   applied before frames leave the process; per-application audio is Windows process
   loopback; and the two tracks must stay separate until the user picks.
@@ -244,7 +237,7 @@ Editing → Recording → Idle
 
 - A portable ZIP and an Inno Setup installer, both produced by `build/build-release.ps1`.
   The installer is per user and needs no administrator rights.
-- The application is published self-contained, so no .NET runtime is required.
+- The application is one `reshot.exe`; nothing else is installed beside it except ffmpeg.
 - A GPL `ffmpeg.exe` is bundled with the installer and the portable ZIP. It is what
   records, it adds roughly 145 MB, and it carries a licence obligation Reshot does not
   share: the binary is GPL even though Reshot stays MIT, so its licence and the source

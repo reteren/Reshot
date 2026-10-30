@@ -1,6 +1,7 @@
 # Reshot roadmap
 
-**Status as of 2026-08-02: phases 0 to 6 are done and version 1.0.2 is released.**
+**Status as of 2026-10-30: phases 0 to 6 are done, 1.2.4 was the last C# release, and 1.2.5
+is the same product rewritten in Rust ([docs/rust-rewrite.md](docs/rust-rewrite.md)).**
 
 The project was built in phases, each one ending with a program you could actually use.
 This file is the record of that, plus what is left.
@@ -9,12 +10,13 @@ This file is the record of that, plus what is left.
 
 | Phase | Scope | Where it lives |
 |---|---|---|
-| 0 | Skeleton: tray, global hotkey, single instance, settings, logging | `Reshot.App`, `Reshot.Core` |
-| 1 | Capture, overlay, rectangular selection, copy and save | `Reshot.Capture`, `Overlay/` |
-| 2 | Selection shapes and the tool toolbar with flyouts | `Overlay/SelectionShape.cs` |
-| 3 | Drawing: brush, shapes, text, eyedropper, undo | `Reshot.Core/Tools`, `History` |
-| 4 | Erasers and effects | `Reshot.Core/Document` |
-| 6 | Video recording, and audio recording beyond the original plan | `Reshot.Recording` |
+| 0 | Skeleton: tray, global hotkey, single instance, settings, logging | `reshot-platform`, `reshot-core` |
+| 1 | Capture, overlay, rectangular selection, copy and save | `reshot-capture`, `reshot/src/overlay` |
+| 2 | Selection shapes and the tool toolbar with flyouts | `reshot-core/src/selection.rs`, `overlay/toolbar.rs` |
+| 3 | Drawing: brush, shapes, text, eyedropper, undo | `reshot-core/src/{tools,history,editor}.rs` |
+| 4 | Erasers and effects | `reshot-core/src/document.rs` |
+| 6 | Video recording, and audio recording beyond the original plan | `reshot-recording` |
+| — | Rewrite in Rust: one executable, every window on gpui | the whole workspace, 1.2.5 |
 
 ### Built beyond the original plan
 
@@ -26,14 +28,14 @@ This file is the record of that, plus what is left.
 - **Per-application audio** through Windows process loopback
 - **Soft erasers** with a Photoshop-style radial falloff
 - **Half-Life 2 / Source styling** across the overlay, the tray menu and the settings
-- **Settings window rebuilt on Tauri** instead of WPF
+- **Settings window rebuilt on Tauri** instead of WPF, then on gpui with the rest in 1.2.5
 - **Per-tool settings**: every tool keeps its own size, opacity and colour
 - **Installer and portable build**, produced by one script
 
 ## Not done
 
-- **Automatic updates.** Velopack was planned in ARCHITECTURE §10 and the `update.auto`
-  key exists in the settings and in the UI, but nothing is wired to it. Turning it on
+- **Automatic updates.** Planned in ARCHITECTURE §10; the `update.auto` key exists in the
+  settings and in the UI, but nothing is wired to it. Turning it on
   changes no behaviour.
 - **Code signing.** Without a certificate SmartScreen warns on first launch. This needs
   money rather than code.

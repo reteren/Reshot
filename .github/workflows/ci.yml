@@ -8,21 +8,29 @@ on:
 
 jobs:
   build:
-    # reshot is Windows-only: WPF, Windows.Graphics.Capture and Media Foundation.
+    # Reshot is Windows-only: Desktop Duplication, Windows.Graphics.Capture, WASAPI, Media.Ocr.
     runs-on: windows-latest
 
     steps:
       - uses: actions/checkout@v4
 
-      - uses: actions/setup-dotnet@v4
+      - uses: dtolnay/rust-toolchain@stable
         with:
-          dotnet-version: '8.0.x'
+          components: clippy
 
-      - name: Restore
-        run: dotnet restore reshot.sln
+      - name: Cache Rust build
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ${{ runner.os }}-cargo-${{ hashFiles('Cargo.lock') }}
 
-      - name: Build
-        run: dotnet build reshot.sln -c Release --no-restore
+      # --locked: the lockfile pins bindgen to prettyplease 0.3.0, without which skia-bindings
+      # does not build; a resolver run must never quietly undo that.
+      - name: Clippy
+        run: cargo clippy --workspace --locked -- -D warnings
 
       - name: Test
-        run: dotnet test reshot.sln -c Release --no-build --verbosity normal
+        run: cargo test --workspace --locked

@@ -5,7 +5,7 @@
 | `reshot-<version>-setup.exe` | Installer. Installs per user, no administrator rights |
 | `reshot-<version>-win-x64-portable.zip` | Portable build: unpack and run `reshot.exe` |
 
-No .NET runtime is required; the build is self-contained.
+One executable and nothing to install alongside it: no runtime, no WebView2 window.
 
 The application is not code signed, so SmartScreen may warn on first launch: "More info"
 then "Run anyway". Checksums are in `SHA256SUMS.txt`.

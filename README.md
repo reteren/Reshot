@@ -10,7 +10,7 @@ It lives in the tray and burns no cycles until you call it.
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-3C9898.svg)](LICENSE)
 [![Windows 10 2004+](https://img.shields.io/badge/Windows-10%202004%2B-3C9898.svg)](#requirements)
-[![.NET 8](https://img.shields.io/badge/.NET-8-3C9898.svg)](https://dotnet.microsoft.com/)
+[![Rust](https://img.shields.io/badge/Rust-1.90%2B-3C9898.svg)](https://www.rust-lang.org/)
 
 </div>
 
@@ -23,7 +23,8 @@ area of any shape, annotate it, and send it to the clipboard or to a file. Or re
 selected area to video with sound.
 
 The guiding rule is **zero background cost**. No timers, no polling, just a global hotkey
-waiting to fire. Idle, that means under 30 MB of memory and roughly 0% CPU.
+waiting to fire. Idle, that means about 21 MB of memory and 0% CPU: even the UI framework
+is only started by the first press.
 
 ## Features
 
@@ -79,7 +80,7 @@ Prebuilt binaries live on the [Releases](https://github.com/reteren/reshot/relea
 | `reshot-<version>-setup.exe` | Installer. Installs per user, no administrator rights |
 | `reshot-<version>-win-x64-portable.zip` | Portable build: unpack and run `reshot.exe` |
 
-No .NET runtime is required; the build is self-contained.
+One executable, nothing else to install: no runtime, no WebView2.
 
 The releases bundle a GPL build of ffmpeg (that is what records), which is what adds about
 145 MB to every artifact. Reshot itself stays MIT; the binary's licence and the source
@@ -118,24 +119,19 @@ lives in the **Info** tab of the settings window, and it is kept in step with th
 
 ## Building from source
 
-You need the [.NET 8 SDK](https://dotnet.microsoft.com/download), plus
-[Node.js 18+](https://nodejs.org/) and [Rust](https://rustup.rs/) for the settings window.
+You need [Rust](https://rustup.rs/) 1.90 or newer (MSVC toolchain). Skia arrives prebuilt
+with `skia-safe`, so there is no LLVM or ninja to install.
 
 ```powershell
-dotnet build reshot.sln -c Debug          # build the solution
-dotnet test                               # run the core tests
-dotnet run --project src/Reshot.App       # run it (minimises to the tray)
+cargo test --workspace                    # run the tests
+cargo run -p reshot                       # run it (it lives in the tray)
+cargo run -p reshot -- --capture          # ... and start a capture right away
+cargo run -p reshot -- --settings=info    # ... or open the settings on a tab
 ```
 
-The settings window is a separate Tauri application:
-
-```powershell
-npm install --prefix src/reshot-tauri
-npm run tauri build --prefix src/reshot-tauri -- --no-bundle
-```
-
-> Build the settings window exactly like that. A plain `cargo build` produces a **dev**
-> binary that loads its UI from the local dev server and shows a blank page without it.
+Recording needs `ffmpeg.exe`; `pwsh build/fetch-ffmpeg.ps1` downloads the pinned build.
+A debug build runs beside an installed Reshot without disturbing it; see
+[CONTRIBUTING.md](CONTRIBUTING.md).
 
 One script produces every release artifact (portable archive, installer, checksums). See
 [build/README.md](build/README.md):
@@ -146,18 +142,19 @@ pwsh build/build-release.ps1
 
 ## Layout
 
-| Project | Purpose |
+| Crate | Purpose |
 |---|---|
-| `src/Reshot.App` | WPF shell: tray, hotkeys, overlay, OCR, export |
-| `src/Reshot.Core` | UI-free core: document model, history, settings, hotkeys |
-| `src/Reshot.Capture` | Windows.Graphics.Capture wrapper (frozen frame and live stream) |
-| `src/Reshot.Recording` | MP4 and M4A through the bundled ffmpeg and NAudio |
-| `src/reshot-tauri` | Settings window: Tauri 2, Rust, TypeScript |
-| `tests/Reshot.Core.Tests` | Core unit tests (xUnit) |
+| `crates/reshot` | The application on [gpui](https://crates.io/crates/gpui): tray menu, overlay, radial menu, recording HUD, settings |
+| `crates/reshot-core` | No windows: document model on Skia, undo, selections, settings, hotkeys, export |
+| `crates/reshot-capture` | Desktop Duplication snapshots, Windows.Graphics.Capture fallback and stream |
+| `crates/reshot-recording` | ffmpeg process, WASAPI and process loopback, separate PCM tracks, MP4/M4A |
+| `crates/reshot-ocr` | Windows.Media.Ocr and the AUTO (Russian + English) line merge |
+| `crates/reshot-platform` | Tray and hotkeys on their own thread, single instance, autostart, clipboard |
 
 Further reading: [ARCHITECTURE.md](ARCHITECTURE.md) for the stack and the reasoning behind
 it, [SPEC.md](SPEC.md) for the functional specification, [ROADMAP.md](ROADMAP.md) for the
-development plan.
+development plan, [docs/rust-rewrite.md](docs/rust-rewrite.md) for how the move from C# to
+Rust went.
 
 ## License
 

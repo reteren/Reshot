@@ -3,6 +3,23 @@
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and this
 project adheres to [Semantic Versioning](https://semver.org/).
 
+## [1.2.5] - Unreleased
+
+### Changed
+
+- Reshot is rewritten in Rust. It is the same program, feature for feature, now one
+  executable: the settings window is part of it instead of a separate Tauri/WebView2
+  process, and no .NET runtime ships beside it.
+- Idle in the tray it holds about 21 MB and no UI framework at all; the interface starts on
+  the first press.
+- The settings window is drawn by the same UI as the overlay and is laid out to match the
+  previous one line for line, in the same Roboto, with the acrylic backdrop and rounded frame.
+
+### Removed
+
+- The C# solution and the Tauri settings application. Settings carry over: `settings.json`
+  keeps its keys.
+
 ## [1.1.4] - 2026-09-01
 
 ### Added

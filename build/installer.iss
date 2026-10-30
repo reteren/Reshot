@@ -4,8 +4,8 @@
 ; staged payload in:
 ;   ISCC.exe installer.iss /DAppVersion=1.0.0 /DPayloadDir=..\dist\reshot /DOutputDir=..\dist
 ;
-; The payload is the published, self-contained app, reshot-tauri.exe (the settings window),
-; and the pinned GPL ffmpeg.exe. All three must stay next to reshot.exe.
+; The payload is reshot.exe (one executable: the settings window is part of it) and the
+; pinned GPL ffmpeg.exe, which must stay next to it.
 
 #ifndef AppVersion
   #define AppVersion "1.0.0"
@@ -57,7 +57,7 @@ ArchitecturesInstallIn64BitMode=x64compatible
 
 OutputDir={#OutputDir}
 OutputBaseFilename=reshot-{#AppVersion}-setup
-SetupIconFile=..\src\Reshot.App\Assets\reshot.ico
+SetupIconFile=..\crates\reshot\assets\reshot.ico
 Compression=lzma2/max
 SolidCompression=yes
 WizardStyle=modern
@@ -107,8 +107,6 @@ Filename: "{app}\{#AppExe}"; Description: "{cm:LaunchProgram,{#AppName}}"; Flags
 ; RunOnceId keeps these from running again on a repeated/partial uninstall.
 Filename: "{sys}\taskkill.exe"; Parameters: "/F /IM reshot.exe"; \
     RunOnceId: "KillReshot"; Flags: runhidden skipifdoesntexist
-Filename: "{sys}\taskkill.exe"; Parameters: "/F /IM reshot-tauri.exe"; \
-    RunOnceId: "KillReshotSettings"; Flags: runhidden skipifdoesntexist
 
 [Code]
 // Settings and logs live in %AppData%\reshot. Offer to remove them, but never assume:

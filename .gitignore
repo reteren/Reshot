@@ -1,13 +1,5 @@
 # ==== Build output ====
-[Bb]in/
-[Oo]bj/
-[Dd]ebug/
-[Rr]elease/
-x64/
-x86/
-publish/
-*.user
-*.suo
+/target/
 
 # Release artifacts produced by build/build-release.ps1
 dist/
@@ -17,27 +9,15 @@ build/ffmpeg/
 
 # ==== Editors, IDEs and local tooling ====
 # Personal configuration: never useful to anyone else, and it leaks local paths.
-.vs/
 .idea/
 # VS Code: personal settings stay out, the shared extension list is worth keeping.
 .vscode/*
 !.vscode/extensions.json
-*.DotSettings.user
 *.cache
 .claude/
 .impeccable/
 .cursor/
 .aider*
-
-# ==== Test results ====
-[Tt]est[Rr]esults/
-*.trx
-*.coverage
-*.coverlet.json
-
-# ==== NuGet ====
-*.nupkg
-packages/
 
 # ==== Secrets and credentials ====
 # Nothing here should ever exist in the repo; the patterns are a safety net so a stray
@@ -60,7 +40,6 @@ appsettings.local.json
 *.log
 logs/
 settings.json
-!src/reshot-tauri/**/tauri.conf.json
 
 # ==== Scratch and backups ====
 scratchpad/
@@ -77,6 +56,3 @@ ehthumbs.db
 Desktop.ini
 desktop.ini
 .DS_Store
-
-# Rust rewrite
-rust/target/
