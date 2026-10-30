@@ -156,7 +156,7 @@ impl ReshotApp {
 fn on_shell_event(event: ShellEvent, cx: &mut App) {
     match event {
         ShellEvent::Hotkey(HotkeySlot::Main) => on_hotkey(cx),
-        ShellEvent::Hotkey(HotkeySlot::Audio) => log::info!("Audio hotkey pressed."),
+        ShellEvent::Hotkey(HotkeySlot::Audio) => crate::recording::toggle_audio_from_settings(cx),
         ShellEvent::TrayMenu => show_tray_menu(cx),
         ShellEvent::TrayCapture => capture(cx, "tray"),
         ShellEvent::SecondInstance => {
@@ -171,13 +171,20 @@ fn on_shell_event(event: ShellEvent, cx: &mut App) {
 /// the radial menu. Telling them apart needs key-up, which RegisterHotKey does not give, so
 /// the key is polled while it is held, and only then.
 fn on_hotkey(cx: &mut App) {
+    let recording = crate::recording::is_active(cx);
     let app = cx.global::<ReshotApp>();
+    // Logged before every guard below: each is a silent return, and this line tells "the
+    // hotkey never arrived" apart from "it arrived and was swallowed".
     log::info!(
-        "Hotkey pressed [overlay={}, holdDetecting={}, paused={}].",
+        "Hotkey pressed [overlay={}, holdDetecting={}, recording={recording}].",
         app.overlay.is_some(),
         app.hold_detecting,
-        app.paused
     );
+    // Recording: the hotkey is the Stop control, no menu.
+    if recording {
+        crate::recording::stop(cx);
+        return;
+    }
     if let Some(overlay) = app.overlay {
         // The overlay is already up: pull it back in front. A game that took the foreground
         // back is exactly when the user presses again.
@@ -317,5 +324,12 @@ pub fn open_settings(cx: &mut App) {
 
 pub fn quit(cx: &mut App) {
     log::info!("Quit requested.");
+    // A recording in flight is finalised rather than thrown away.
+    crate::recording::shutdown(cx);
     cx.quit();
+}
+
+/// A tray balloon, for anything that has to tell the user something without a window.
+pub fn balloon(cx: &App, title: &str, text: &str, icon: BalloonIcon) {
+    cx.global::<ReshotApp>().shell.show_balloon(title, text, icon);
 }
