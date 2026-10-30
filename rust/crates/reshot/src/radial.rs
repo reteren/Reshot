@@ -2,10 +2,6 @@
 //! cancels can land outside this small window, and a release flick can end beyond its rim.
 
 use std::f32::consts::PI;
-use std::sync::{
-    Arc,
-    atomic::{AtomicBool, Ordering},
-};
 use std::time::{Duration, Instant};
 
 use gpui::{
@@ -118,7 +114,7 @@ pub fn open(cx: &mut App, vk: u32) {
             win::force_foreground(hwnd, game);
         });
         if game {
-            keep_over_game(cx, handle, raw);
+            winutil::keep_over_game(cx, handle, raw);
         }
     }
     cx.spawn(async move |cx: &mut AsyncApp| {
@@ -150,48 +146,6 @@ pub fn open(cx: &mut App, vk: u32) {
                     break;
                 }
             }
-        }
-    })
-    .detach();
-}
-
-fn keep_over_game(cx: &mut App, handle: WindowHandle<RadialMenu>, raw: isize) {
-    let won = Arc::new(AtomicBool::new(false));
-    cx.spawn(async move |cx: &mut AsyncApp| {
-        let mut attempts = 0;
-        loop {
-            let stealing = attempts < 8 && !won.load(Ordering::Relaxed);
-            cx.background_executor()
-                .timer(if stealing {
-                    Duration::from_millis(80)
-                } else {
-                    Duration::from_millis(250)
-                })
-                .await;
-            if cx
-                .update(|cx| handle.update(cx, |_, _, _| ()))
-                .ok()
-                .and_then(Result::ok)
-                .is_none()
-            {
-                break;
-            }
-            let stealing = attempts < 8 && !won.load(Ordering::Relaxed);
-            let won_flag = Arc::clone(&won);
-            let _ = cx.update(|cx| {
-                winutil::after_update(cx, move || {
-                    let hwnd = win::hwnd(raw);
-                    if stealing {
-                        win::release_cursor_clip();
-                        if win::force_foreground(hwnd, false) {
-                            won_flag.store(true, Ordering::Relaxed);
-                        }
-                    } else {
-                        win::assert_topmost(hwnd);
-                    }
-                })
-            });
-            attempts += usize::from(stealing);
         }
     })
     .detach();

@@ -154,6 +154,13 @@ impl Overlay {
             .collect();
         drop(frame);
         reshot_core::fonts::warmup();
+        // Decided before the window appears: afterwards the foreground is ours and the answer
+        // is always no. Every unlock and input-queue trick exists for the game case alone.
+        let game = win::foreground_is_fullscreen_foreign_window();
+        if game {
+            // After the frame is frozen, so the capture still saw the game.
+            win::unlock_input_from_game();
+        }
 
         let handle = cx
             .open_window(winutil::popup_options(winutil::logical(r, scale), true), move |window, cx| {
@@ -221,12 +228,13 @@ impl Overlay {
                 if hide {
                     win::exclude_from_capture(h, true);
                 }
-                let game = win::foreground_is_fullscreen_foreign_window();
-                if game {
-                    win::unlock_input_from_game();
-                }
-                win::force_foreground(h, game);
+                // The invasive tier gets its single shot here, over a game only.
+                let won = win::force_foreground(h, game);
+                log::info!("Overlay shown over {}; foreground = {}.", if game { "a game" } else { "desktop" }, if won { "ours" } else { "theirs" });
             });
+            if game {
+                winutil::keep_over_game(cx, handle, raw);
+            }
         }
         Some(handle)
     }
