@@ -3,7 +3,17 @@
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and this
 project adheres to [Semantic Versioning](https://semver.org/).
 
-## [1.2.6] - Unreleased
+## [1.2.7] - Unreleased
+
+### Fixed
+
+- The erasers, blur and pixelation keep up with the mouse. Each move used to redo the whole
+  stroke so far (up to 0.4 s a move on a long stroke over two monitors, which is what made
+  the cursor jump); now it does only the new piece of it, in a few milliseconds.
+- Blur and pixelation lie on the image without a thin dark outline. Every soft edge,
+  brush strokes included, was drawn slightly too dark.
+
+## [1.2.6] - Unreleased (test build)
 
 ### Fixed
 
