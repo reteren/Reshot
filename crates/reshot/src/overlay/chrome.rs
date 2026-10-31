@@ -108,7 +108,7 @@ impl ChromeScene {
             }
         }
 
-        // OCR: a thin outline per word, a bold one over the selected span. Outlines rather
+        // OCR: a thin outline per line, a bold one over the selected span. Outlines rather
         // than fills, so the letters stay readable.
         for (r, selected) in &self.ocr_words {
             let r = Rect::from_ltrb(r.left - 1.5, r.top - 1.5, r.right + 1.5, r.bottom + 1.5);

@@ -174,10 +174,7 @@ impl Render for Overlay {
             polygon: self.polygon.clone().map(|p| (p, self.polygon_cursor)),
             handles: if show_handles && self.polygon.is_none() { self.sel.active.as_ref().map(|a| a.bounds) } else { None },
             handle_size: HANDLE_SIZE,
-            ocr_words: match self.ocr.selected_range() {
-                Some((a, b)) => self.ocr.words.iter().enumerate().map(|(i, w)| (w.rect, i >= a && i <= b)).collect(),
-                None => self.ocr.words.iter().map(|w| (w.rect, false)).collect(),
-            },
+            ocr_words: self.ocr.line_boxes(),
         };
 
         let entity = cx.entity();

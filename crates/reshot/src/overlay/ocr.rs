@@ -140,6 +140,33 @@ impl OcrState {
         Some((a.min(f), a.max(f)))
     }
 
+    /// The outlines to draw: one per recognised line rather than one per word, so a line reads
+    /// as a single row. The selected part of a line gets its own box spanning the selected
+    /// words (`true`), drawn after the line's own; a fully selected line has only that one.
+    pub fn line_boxes(&self) -> Vec<(Rect, bool)> {
+        let range = self.selected_range();
+        let mut plain = Vec::new();
+        let mut selected = Vec::new();
+        let mut i = 0;
+        while i < self.words.len() {
+            let line = self.words[i].line;
+            let end = self.words[i..].iter().position(|w| w.line != line).map_or(self.words.len(), |n| i + n);
+            let union = |a: usize, b: usize| {
+                self.words[a..b].iter().map(|w| w.rect).reduce(Rect::join2).expect("non-empty span")
+            };
+            let picked = range.map(|(a, b)| (a.max(i), (b + 1).min(end))).filter(|(a, b)| a < b);
+            if picked != Some((i, end)) {
+                plain.push((union(i, end), false));
+            }
+            if let Some((a, b)) = picked {
+                selected.push((union(a, b), true));
+            }
+            i = end;
+        }
+        plain.extend(selected);
+        plain
+    }
+
     fn join(&self, a: usize, b: usize) -> String {
         let mut out = String::new();
         let mut line = self.words[a].line;
@@ -197,6 +224,24 @@ mod tests {
         s.start_select(Point::new(125.0, 105.0));
         s.extend_select(Point::new(101.0, 105.0));
         assert_eq!(s.text_to_copy().unwrap().0, "hello world");
+    }
+
+    #[test]
+    fn boxes_cover_whole_lines_and_the_selected_span() {
+        let mut s = state();
+        // Nothing selected: one thin box per line, spanning its words.
+        assert_eq!(
+            s.line_boxes(),
+            vec![(Rect::from_ltrb(100.0, 100.0, 130.0, 110.0), false), (Rect::from_ltrb(100.0, 100.0, 110.0, 110.0), false)]
+        );
+        // "world" alone: the first line keeps its thin box, the selected word gets a bold one.
+        s.start_select(Point::new(125.0, 105.0));
+        assert_eq!(s.line_boxes().last(), Some(&(Rect::from_ltrb(120.0, 100.0, 130.0, 110.0), true)));
+        assert_eq!(s.line_boxes().len(), 3);
+        // Everything: only bold boxes, one per line.
+        s.select_all();
+        assert!(s.line_boxes().iter().all(|(_, selected)| *selected));
+        assert_eq!(s.line_boxes().len(), 2);
     }
 
     #[test]
