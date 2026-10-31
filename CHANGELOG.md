@@ -3,7 +3,12 @@
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and this
 project adheres to [Semantic Versioning](https://semver.org/).
 
-## [1.2.8] - Unreleased
+## [1.2.8] - Unreleased (test build)
+
+### Changed
+
+- In text recognition the outlines follow whole lines rather than single words, and a
+  selection is one box per line from its first to its last selected word.
 
 ### Fixed
 
