@@ -106,13 +106,9 @@ pub fn try_recognize(
     if width > max || height > max {
         bail!("OCR image exceeds Windows maximum dimension {max}");
     }
-    let scale = if width.max(height) < 1200 && width * 2 <= max && height * 2 <= max {
-        2
-    } else {
-        1
-    };
-    let pixels = if scale == 2 {
-        upscale_bgra(bgra, width, height, stride)
+    let scale = upscale_factor(width, height, max);
+    let pixels = if scale > 1 {
+        upscale_bgra(bgra, width, height, stride, scale)
     } else {
         compact_bgra(bgra, width, height, stride)
     };
@@ -266,39 +262,109 @@ fn compact_bgra(source: &[u8], width: u32, height: u32, stride: usize) -> Vec<u8
     out
 }
 
-// Skia's high-quality upsampling is cubic. Mitchell-Netravali keeps small UI text legible
-// without the hard edges of nearest-neighbour scaling. Both engines share this one bitmap.
-fn upscale_bgra(source: &[u8], width: u32, height: u32, stride: usize) -> Vec<u8> {
-    let out_width = width as usize * 2;
-    let out_height = height as usize * 2;
-    let mut out = vec![0; out_width * out_height * 4];
-    for y in 0..out_height {
-        let sy = (y as f32 + 0.5) / 2.0 - 0.5;
-        let iy = sy.floor() as i32;
-        for x in 0..out_width {
-            let sx = (x as f32 + 0.5) / 2.0 - 0.5;
-            let ix = sx.floor() as i32;
-            let mut sum = [0.0f32; 4];
-            let mut weight_sum = 0.0f32;
-            for dy in -1..=2 {
-                let source_y = (iy + dy).clamp(0, height as i32 - 1) as usize;
-                let wy = cubic(sy - (iy + dy) as f32);
-                for dx in -1..=2 {
-                    let source_x = (ix + dx).clamp(0, width as i32 - 1) as usize;
-                    let weight = wy * cubic(sx - (ix + dx) as f32);
-                    let offset = source_y * stride + source_x * 4;
-                    for channel in 0..4 {
-                        sum[channel] += source[offset + channel] as f32 * weight;
-                    }
-                    weight_sum += weight;
+/// How much to enlarge the image before recognition. Windows OCR finds lines by their
+/// height: UI text 9-10 px tall at 100 % display scaling is mostly not detected at all at its
+/// own size (measured on 2400x1300 crops of Segoe UI: 3-38 % of the words found at 1x,
+/// 76-100 % at 2x, 95-100 % at 3x), while every word it does detect is read correctly. The
+/// factor is the largest that keeps both sides within the engine's limit (10000 px) and the
+/// pixel budget, so a large selection is enlarged as well, not only a small one.
+fn upscale_factor(width: u32, height: u32, max: u32) -> u32 {
+    (1..=MAX_UPSCALE)
+        .rev()
+        .find(|&s| {
+            width * s <= max
+                && height * s <= max
+                && u64::from(width * s) * u64::from(height * s) <= MAX_UPSCALED_PIXELS
+        })
+        .unwrap_or(1)
+}
+
+const MAX_UPSCALE: u32 = 3;
+/// Above this the two engine passes take seconds; a full 4480x1440 desktop at 2x is 25.8 MP.
+const MAX_UPSCALED_PIXELS: u64 = 30_000_000;
+
+/// Enlarges by an integer factor with a Mitchell-Netravali cubic, which keeps small UI text
+/// legible without the hard steps of nearest-neighbour. Separable (rows, then columns) with
+/// the weights computed once per phase, and split into bands of rows across the cores: the
+/// direct 16-tap version took over a second for a large selection, before the engines ran.
+fn upscale_bgra(source: &[u8], width: u32, height: u32, stride: usize, scale: u32) -> Vec<u8> {
+    let (w, h, s) = (width as usize, height as usize, scale as usize);
+    let (out_w, out_h) = (w * s, h * s);
+    // Output pixel `o` maps to source `(o + 0.5) / s - 0.5`: four taps from `o / s - 1`
+    // (or one earlier for phases left of the source pixel's centre), same weights per phase.
+    let taps: Vec<(isize, [f32; 4])> = (0..s)
+        .map(|phase| {
+            let src = (phase as f32 + 0.5) / s as f32 - 0.5;
+            let first = src.floor() as isize - 1;
+            let mut wts = [0.0f32; 4];
+            for (k, wt) in wts.iter_mut().enumerate() {
+                *wt = cubic(src - (first + k as isize) as f32);
+            }
+            let sum: f32 = wts.iter().sum();
+            wts.iter_mut().for_each(|wt| *wt /= sum);
+            (first, wts)
+        })
+        .collect();
+    let clamp = |i: isize, n: usize| i.clamp(0, n as isize - 1) as usize;
+
+    // One source row widened to `out_w`, as floats (B, G, R per pixel; alpha is ignored).
+    let widen = |y: usize, row: &mut [f32]| {
+        let src = &source[y * stride..];
+        for ox in 0..out_w {
+            let (first, wts) = &taps[ox % s];
+            let base = (ox / s) as isize + first;
+            let mut acc = [0.0f32; 3];
+            for (k, wt) in wts.iter().enumerate() {
+                let px = &src[clamp(base + k as isize, w) * 4..];
+                for c in 0..3 {
+                    acc[c] += px[c] as f32 * wt;
                 }
             }
-            let offset = (y * out_width + x) * 4;
-            for channel in 0..4 {
-                out[offset + channel] = (sum[channel] / weight_sum).round().clamp(0.0, 255.0) as u8;
-            }
+            row[ox * 3..ox * 3 + 3].copy_from_slice(&acc);
         }
-    }
+    };
+
+    let mut out = vec![0u8; out_w * out_h * 4];
+    let threads = std::thread::available_parallelism()
+        .map_or(4, |n| n.get())
+        .min(16);
+    let band = out_h.div_ceil(threads).max(1);
+    std::thread::scope(|scope| {
+        for (b, chunk) in out.chunks_mut(band * out_w * 4).enumerate() {
+            let (widen, taps) = (&widen, &taps);
+            scope.spawn(move || {
+                // The four widened source rows the current output row reads, by source row.
+                let mut cache: [(usize, Vec<f32>); 4] =
+                    std::array::from_fn(|_| (usize::MAX, vec![0.0; out_w * 3]));
+                for (i, dst) in chunk.chunks_mut(out_w * 4).enumerate() {
+                    let oy = b * band + i;
+                    let (first, wts) = &taps[oy % s];
+                    let base = (oy / s) as isize + first;
+                    for k in 0..4 {
+                        let y = clamp(base + k as isize, h);
+                        let slot = &mut cache[y % 4];
+                        if slot.0 != y {
+                            widen(y, &mut slot.1);
+                            slot.0 = y;
+                        }
+                    }
+                    let rows: [&[f32]; 4] = std::array::from_fn(|k| {
+                        cache[clamp(base + k as isize, h) % 4].1.as_slice()
+                    });
+                    for ox in 0..out_w {
+                        for c in 0..3 {
+                            let v = rows[0][ox * 3 + c] * wts[0]
+                                + rows[1][ox * 3 + c] * wts[1]
+                                + rows[2][ox * 3 + c] * wts[2]
+                                + rows[3][ox * 3 + c] * wts[3];
+                            dst[ox * 4 + c] = v.round().clamp(0.0, 255.0) as u8;
+                        }
+                        dst[ox * 4 + 3] = 255;
+                    }
+                }
+            });
+        }
+    });
     out
 }
 
@@ -392,11 +458,59 @@ mod tests {
             compact_bgra(&source, 1, 2, 8),
             [10, 20, 30, 255, 40, 50, 60, 255]
         );
-        let scaled = upscale_bgra(&source, 1, 2, 8);
+        let scaled = upscale_bgra(&source, 1, 2, 8, 2);
         assert_eq!(scaled.len(), 2 * 4 * 4);
         let mut different_padding = source;
         different_padding[4..8].fill(0);
         different_padding[12..16].fill(255);
-        assert_eq!(scaled, upscale_bgra(&different_padding, 1, 2, 8));
+        assert_eq!(scaled, upscale_bgra(&different_padding, 1, 2, 8, 2));
+    }
+
+    #[test]
+    fn upscaling_keeps_flat_areas_and_edges_in_place() {
+        // Left half black, right half white, 8x3 with a padded stride.
+        let (w, h, stride) = (8usize, 3usize, 40usize);
+        let mut src = vec![0u8; stride * h];
+        for y in 0..h {
+            for x in 4..w {
+                src[y * stride + x * 4..y * stride + x * 4 + 3].fill(255);
+            }
+        }
+        for scale in [2u32, 3] {
+            let s = scale as usize;
+            let out = upscale_bgra(&src, w as u32, h as u32, stride, scale);
+            assert_eq!(out.len(), w * s * h * s * 4);
+            let at = |x: usize, y: usize| out[(y * w * s + x) * 4];
+            for y in 0..h * s {
+                assert_eq!(at(0, y), 0, "flat black stays black at x{scale}");
+                assert_eq!(at(w * s - 1, y), 255, "flat white stays white at x{scale}");
+                // The edge sits between source pixels 3 and 4, at output x = 4 * s.
+                assert!(
+                    at(4 * s - 1, y) < 128 && at(4 * s, y) > 127,
+                    "edge stays put at x{scale}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn the_factor_is_the_largest_that_fits_the_engine() {
+        assert_eq!(upscale_factor(800, 600, 10_000), 3);
+        assert_eq!(
+            upscale_factor(2400, 1300, 10_000),
+            3,
+            "a large selection is enlarged too"
+        );
+        assert_eq!(upscale_factor(4480, 1440, 10_000), 2);
+        assert_eq!(
+            upscale_factor(5760, 1080, 10_000),
+            1,
+            "past the engine's limit"
+        );
+        assert_eq!(
+            upscale_factor(3000, 3000, 10_000),
+            1,
+            "past the pixel budget"
+        );
     }
 }

@@ -3,6 +3,18 @@
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and this
 project adheres to [Semantic Versioning](https://semver.org/).
 
+## [1.2.8] - Unreleased
+
+### Fixed
+
+- Text recognition finds small text. A selection wider than 1200 px went to the OCR engine
+  at its own size, where text 9 to 10 px tall (UI text at 100 % scaling) was mostly not
+  detected at all: 3 to 38 % of the words. Every selection is now enlarged as far as the
+  engine allows, three times up to 3333 px wide and twice up to 5000 px, which finds 95 to
+  100 % of them; a full 4480x1440 desktop gets 74 to 97 %. A large selection takes about
+  1 to 1.5 s to recognise instead of 0.5; the enlargement itself now takes tens of
+  milliseconds rather than more than a second.
+
 ## [1.2.7] - Unreleased
 
 ### Fixed
