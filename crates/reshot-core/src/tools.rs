@@ -2,10 +2,14 @@
 //! vectors only while being drawn; on commit they are baked into the paint layer.
 
 use skia_safe::{
-    Canvas, Color, Font, Paint, PaintCap, PaintJoin, PaintStyle, Path, PathBuilder, Point, Rect,
+    BlurStyle, Canvas, Color, Font, MaskFilter, Paint, PaintCap, PaintJoin, PaintStyle, Path, PathBuilder, Point,
+    Rect,
 };
 
-use crate::fonts;
+use crate::{fonts, soft};
+
+/// hive's default brush hardness.
+pub const DEFAULT_HARDNESS: f32 = 0.85;
 
 /// Brush appearance (SPEC §6.1).
 #[derive(Clone, Debug, PartialEq)]
@@ -16,8 +20,8 @@ pub struct BrushSettings {
     pub thickness: f32,
     /// 0..1, applied to the whole stroke so overlaps don't darken.
     pub opacity: f32,
-    /// Eraser radial falloff (Photoshop hardness). 1 = the whole disc erases at full strength;
-    /// lower values fade from 100% at the centre to this fraction at the rim. Erasers only.
+    /// 0..1, how much of the brush's radius is solid before its edge fades (see [`soft`]):
+    /// 1 is a crisp edge, 0 fades from the very centre. Every tool but text.
     pub hardness: f32,
     /// Text tool font family. Empty or unknown resolves to the default.
     pub font_family: String,
@@ -29,53 +33,9 @@ impl Default for BrushSettings {
             color: Color::from_rgb(0xFF, 0x3B, 0x30),
             thickness: 6.0,
             opacity: 1.0,
-            hardness: 1.0,
+            hardness: DEFAULT_HARDNESS,
             font_family: fonts::DEFAULT_FAMILY.into(),
         }
-    }
-}
-
-/// One freehand stroke. Points accumulate into a single path so the stroke is painted exactly
-/// once on commit and a semi-transparent stroke does not build up where it crosses itself.
-pub struct BrushStroke {
-    path: PathBuilder,
-    started: bool,
-    pub settings: BrushSettings,
-}
-
-impl BrushStroke {
-    pub fn new(settings: BrushSettings) -> Self {
-        Self {
-            path: PathBuilder::new(),
-            started: false,
-            settings,
-        }
-    }
-
-    pub fn is_empty(&self) -> bool {
-        !self.started
-    }
-
-    pub fn begin(&mut self, p: Point) {
-        self.path.move_to(p);
-        self.started = true;
-    }
-
-    pub fn extend(&mut self, p: Point) {
-        if self.started {
-            self.path.line_to(p);
-        }
-    }
-
-    /// The stroke so far, for live preview or commit.
-    pub fn path(&self) -> Path {
-        self.path.snapshot()
-    }
-
-    /// Round cap and join, anti-aliased.
-    pub fn paint(&self) -> Paint {
-        let a = (self.settings.opacity.clamp(0.0, 1.0) * 255.0).round() as u8;
-        stroke_paint(self.settings.color.with_a(a), self.settings.thickness)
     }
 }
 
@@ -110,6 +70,11 @@ pub struct VectorObject {
     pub p1: Point,
     pub p2: Point,
     pub color: Color,
+    /// 0..1, applied to the object as a whole so its own overlaps (an arrow's barbs over its
+    /// shaft) do not darken.
+    pub opacity: f32,
+    /// 0..1; below 1 the outline is blurred (see [`soft::shape_blur_sigma`]). Not for text.
+    pub hardness: f32,
     pub thickness: f32,
     pub text: String,
     pub font_size: f32,
@@ -126,6 +91,8 @@ impl Default for VectorObject {
             p1: Point::default(),
             p2: Point::default(),
             color: Color::BLACK,
+            opacity: 1.0,
+            hardness: 1.0,
             thickness: 4.0,
             text: String::new(),
             font_size: 32.0,
@@ -137,7 +104,23 @@ impl Default for VectorObject {
 
 impl VectorObject {
     pub fn draw(&self, canvas: &Canvas) {
-        let stroke = stroke_paint(self.color, self.thickness);
+        let opacity = self.opacity.clamp(0.0, 1.0);
+        let layered = opacity < 1.0;
+        if layered {
+            canvas.save_layer_alpha_f(None, opacity);
+        }
+        self.draw_opaque(canvas);
+        if layered {
+            canvas.restore();
+        }
+    }
+
+    fn draw_opaque(&self, canvas: &Canvas) {
+        let mut stroke = stroke_paint(self.color, self.thickness);
+        let sigma = self.blur_sigma();
+        if sigma > 0.05 {
+            stroke.set_mask_filter(MaskFilter::blur(BlurStyle::Normal, sigma, false));
+        }
         match self.kind {
             VectorKind::Circle => {
                 canvas.draw_oval(self.bounds, &stroke);
@@ -206,6 +189,19 @@ impl VectorObject {
             canvas.draw_str(line, (self.p1.x, y), &font, &paint);
             y += spacing;
         }
+    }
+
+    fn blur_sigma(&self) -> f32 {
+        match self.kind {
+            VectorKind::Text => 0.0,
+            _ => soft::shape_blur_sigma(self.thickness, self.hardness),
+        }
+    }
+
+    /// How far past [`Self::compute_bounds`] the object's pixels can reach: half the outline,
+    /// the largest arrowhead barb (clamped to 40), anti-aliasing and three sigmas of softness.
+    pub fn padding(&self) -> f32 {
+        self.thickness / 2.0 + 44.0 + self.blur_sigma() * 3.0
     }
 
     /// Axis-aligned bounds of the object: the rasterisation region and, for text, what the

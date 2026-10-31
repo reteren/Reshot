@@ -1,7 +1,7 @@
 //! The tool settings panel (SPEC §6.5): pulled out of the dotted strip above the toolbar by a
-//! click or Shift. It adapts to the tool: erasers show size and the Photoshop-style opacity
-//! (hardness), effects show size and strength, ink tools show size, opacity and the colour
-//! picker, and the Text tool adds the font family.
+//! click or Shift. It adapts to the tool: every tool has size, opacity (strength for effects)
+//! and, except text, hardness; ink tools add the colour picker and the Text tool the font
+//! family.
 
 use std::cell::Cell;
 use std::rc::Rc;
@@ -265,6 +265,9 @@ fn set_slider(editor: &mut Editor, tool: DrawTool, s: Slider, v: f32) {
 /// Natural height of the panel for a tool: sections vary.
 pub fn panel_height(tool: DrawTool) -> f32 {
     let mut h = 20.0 + 26.0 + 26.0;
+    if tool.has_hardness() {
+        h += 26.0;
+    }
     if tool == DrawTool::Text {
         h += 32.0;
     }
@@ -781,13 +784,11 @@ impl Overlay {
         if tool == DrawTool::Text {
             content = content.child(self.font_row(cx));
         }
-        if tool.is_eraser() {
-            // Erasers show the Photoshop hardness as "Opacity": the centre always erases 100%,
-            // lower values fade the erase toward the rim.
-            content = content.child(self.slider_row(Slider::Hardness, "Opacity", tool, cx));
-        } else {
-            let name = if tool.is_effect() { "Strength" } else { "Opacity" };
-            content = content.child(self.slider_row(Slider::Opacity, name, tool, cx));
+        let name = if tool.is_effect() { "Strength" } else { "Opacity" };
+        content = content.child(self.slider_row(Slider::Opacity, name, tool, cx));
+        if tool.has_hardness() {
+            // How much of the brush is solid before its edge fades, as in hive.
+            content = content.child(self.slider_row(Slider::Hardness, "Hardness", tool, cx));
         }
         if tool.has_color() {
             content = content.child(self.color_section(tool, cx));

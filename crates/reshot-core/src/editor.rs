@@ -4,16 +4,15 @@
 
 use std::collections::HashMap;
 
-use skia_safe::gradient::{Colors, Gradient, Interpolation, shaders};
 use skia_safe::{
-    Bitmap, BlendMode, Color, Color4f, Contains, FilterMode, IRect, Image, MipmapMode, Paint, PaintCap,
-    PaintJoin, PaintStyle, Path, PathBuilder, Point, Rect, SamplingOptions, TileMode,
-    image_filters,
+    Bitmap, BlendMode, Color, FilterMode, IRect, Image, MipmapMode, Paint, Path, Point, Rect, SamplingOptions,
+    TileMode, image_filters,
 };
 
 use crate::document::{self, CaptureDocument, Layer};
 use crate::history::{LayerRegionCommand, UndoHistory};
-use crate::tools::{BrushSettings, BrushStroke, VectorKind, VectorObject};
+use crate::soft::{self, Coverage};
+use crate::tools::{BrushSettings, VectorKind, VectorObject};
 
 /// Every drawing sub-tool (SPEC §5).
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
@@ -62,6 +61,11 @@ impl DrawTool {
     /// Ink tools have a colour; erasers and effects do not.
     pub fn has_color(self) -> bool {
         !self.is_region()
+    }
+
+    /// Every tool with an edge has a hardness; text has none.
+    pub fn has_hardness(self) -> bool {
+        self != Self::Text
     }
 
     /// Which settings slot the tool draws from. Shapes share one, lines share one, the three
@@ -142,33 +146,30 @@ pub fn default_tool_settings() -> HashMap<ToolKey, BrushSettings> {
     ])
 }
 
-/// Eraser coverage placed in the frame: where it sits, and its pixels as an image.
+/// Coverage placed in the frame: where it sits, and its pixels as an image.
 type PlacedCoverage = (IRect, Image);
 
-/// A region gesture in progress: brushed path or Ctrl-dragged rect.
+/// A soft stroke in progress (brush, effect or eraser), or a Ctrl-dragged rect.
 struct RegionGesture {
     tool: DrawTool,
     start: Point,
     rect_mode: bool,
     rect: Rect,
-    path: PathBuilder,
     clip: Option<Path>,
+    /// Frame area the stroke has touched so far: what the commit snapshots for undo.
+    drawn: Option<IRect>,
     /// Bumped by every new point, so the per-frame cache below knows when it is stale.
     generation: u64,
     /// The latest segment: all a move changes on screen.
     prev: Point,
     last: Point,
-    /// Soft-eraser coverage built stamp by stamp as the path grows (brush mode). A segment's
-    /// stamps depend on that segment alone, so a move adds only its own instead of
-    /// re-stamping the whole stroke, and the commit uses exactly what the preview showed.
-    coverage: Option<(IRect, Bitmap)>,
-    /// What every tile of one frame shares: the area and the coverage image at `generation`.
-    frame: Option<(u64, Path, Option<PlacedCoverage>)>,
-}
-
-struct BrushGesture {
-    stroke: BrushStroke,
-    clip: Option<Path>,
+    /// The stroke's coverage, built a segment at a time with the brush's hardness (see
+    /// [`soft`]). A move adds only its own capsule instead of redoing the whole stroke, and
+    /// the commit uses exactly what the preview showed.
+    coverage: Coverage,
+    /// What every tile of one frame shares: the rect's area and the coverage image at
+    /// `generation`.
+    frame: Option<(u64, Option<Path>, Option<PlacedCoverage>)>,
 }
 
 pub struct Editor {
@@ -181,7 +182,6 @@ pub struct Editor {
     /// The layers as images, at `revision`. A mutable bitmap's `as_image` copies all of it,
     /// and the overlay paints tile by tile: per tile, per frame, that was 25 MB per layer.
     layer_images: (u64, [Option<Image>; 3]),
-    brush: Option<BrushGesture>,
     shape: Option<(VectorObject, Point)>,
     shape_clip: Option<Path>,
     text: Option<VectorObject>,
@@ -208,7 +208,6 @@ impl Editor {
             blur_cache: None,
             pixel_cache: None,
             layer_images: (u64::MAX, [None, None, None]),
-            brush: None,
             shape: None,
             shape_clip: None,
             text: None,
@@ -309,20 +308,15 @@ impl Editor {
     // ---- Brush -----------------------------------------------------------------------
 
     pub fn begin_brush(&mut self, p: Point, clip: Option<Path>) {
-        let mut stroke = BrushStroke::new(self.settings(DrawTool::Brush).clone());
-        stroke.begin(p);
-        self.brush = Some(BrushGesture { stroke, clip });
+        self.begin_region(DrawTool::Brush, p, false, clip);
     }
 
     pub fn extend(&mut self, p: Point) {
-        if let Some(b) = &mut self.brush {
-            b.stroke.extend(p);
-        }
         if let Some((v, start)) = &mut self.shape {
             update_shape(v, *start, p);
         }
         if let Some(tool) = self.region.as_ref().map(|r| r.tool) {
-            let profile = self.stamp_profile(tool);
+            let (radius, hardness, strength) = self.stroke_profile(tool);
             let frame = (self.width(), self.height());
             let r = self.region.as_mut().expect("checked above");
             r.generation += 1;
@@ -334,45 +328,11 @@ impl Editor {
                     r.start.y.max(p.y),
                 );
             } else {
-                r.path.line_to(p);
                 (r.prev, r.last) = (r.last, p);
-                if tool.is_eraser() {
-                    let points = segment_stamps(r.prev, p, profile.0);
-                    stamp(&mut r.coverage, frame, &points, profile);
-                }
+                let touched = soft::accumulate_segment(&mut r.coverage, frame, r.prev, p, radius, hardness, strength);
+                r.drawn = soft::join(r.drawn, touched);
             }
         }
-    }
-
-    /// The live brush stroke and its paint, for the preview.
-    pub fn brush_preview(&self) -> Option<(Path, Paint, Option<&Path>)> {
-        self.brush
-            .as_ref()
-            .map(|b| (b.stroke.path(), b.stroke.paint(), b.clip.as_ref()))
-    }
-
-    fn end_brush(&mut self) {
-        let Some(BrushGesture { stroke, clip }) = self.brush.take() else {
-            return;
-        };
-        if stroke.is_empty() {
-            return;
-        }
-        let path = stroke.path();
-        let pad = stroke.settings.thickness / 2.0 + 2.0;
-        let b = path.bounds();
-        let Some(region) = self.to_region(Rect::from_ltrb(
-            b.left - pad,
-            b.top - pad,
-            b.right + pad,
-            b.bottom + pad,
-        )) else {
-            return;
-        };
-        let paint = stroke.paint();
-        self.apply_region_op(Layer::Paint, region, |d| {
-            d.commit_stroke(&path, &paint, clip.as_ref())
-        });
     }
 
     // ---- Shapes and text ---------------------------------------------------------------
@@ -382,6 +342,8 @@ impl Editor {
         let v = VectorObject {
             kind: tool.vector_kind(),
             color: s.color,
+            opacity: s.opacity,
+            hardness: s.hardness,
             thickness: s.thickness,
             p1: p,
             p2: p,
@@ -410,8 +372,7 @@ impl Editor {
     /// Bakes a shape or text block into the paint layer, clipped to the selection, with a
     /// region-snapshot undo. Once baked it is ordinary ink.
     fn commit_vector(&mut self, v: &VectorObject, clip: Option<&Path>) {
-        // 44 px covers the largest arrowhead barb (clamped to 40) plus anti-aliasing.
-        let pad = v.thickness / 2.0 + 44.0;
+        let pad = v.padding();
         let b = v.compute_bounds();
         let Some(region) = self.to_region(Rect::from_ltrb(
             b.left - pad,
@@ -431,6 +392,7 @@ impl Editor {
             kind: VectorKind::Text,
             p1: p,
             color: s.color,
+            opacity: s.opacity,
             font_size: (s.thickness * 5.0).max(16.0),
             font_family: s.font_family.clone(),
             ..Default::default()
@@ -469,6 +431,7 @@ impl Editor {
     pub fn restyle_text(&mut self, s: &BrushSettings) {
         if let Some(t) = &mut self.text {
             t.color = s.color;
+            t.opacity = s.opacity;
             t.font_size = (s.thickness * 5.0).max(16.0);
             t.font_family = s.font_family.clone();
         }
@@ -486,22 +449,20 @@ impl Editor {
     // ---- Effects and erasers --------------------------------------------------------------
 
     pub fn begin_region(&mut self, tool: DrawTool, p: Point, rect_mode: bool, clip: Option<Path>) {
-        let mut path = PathBuilder::new();
-        if !rect_mode {
-            path.move_to(p);
-        }
         let mut coverage = None;
-        if tool.is_eraser() && !rect_mode {
-            let profile = self.stamp_profile(tool);
-            stamp(&mut coverage, (self.width(), self.height()), &[p], profile);
+        let mut drawn = None;
+        if !rect_mode {
+            // A press alone leaves a dot.
+            let (radius, hardness, strength) = self.stroke_profile(tool);
+            drawn = soft::accumulate_segment(&mut coverage, (self.width(), self.height()), p, p, radius, hardness, strength);
         }
         self.region = Some(RegionGesture {
             tool,
             start: p,
             rect_mode,
             rect: Rect::from_xywh(p.x, p.y, 0.0, 0.0),
-            path,
             clip,
+            drawn,
             generation: 0,
             prev: p,
             last: p,
@@ -510,25 +471,32 @@ impl Editor {
         });
     }
 
-    /// An eraser stamp's radius and rim strength (the centre is always full).
-    fn stamp_profile(&self, tool: DrawTool) -> (f32, f32) {
+    /// A stroke's radius, hardness and coverage strength. The brush is as wide as its size;
+    /// effects and erasers keep the 10 px minimum they always had. Erasers bake their opacity
+    /// into the coverage (that is how much they remove); the brush applies its opacity to the
+    /// finished stroke instead, and an effect's opacity is its strength, not its coverage.
+    fn stroke_profile(&self, tool: DrawTool) -> (f32, f32, f32) {
         let s = self.settings(tool);
-        let rim = (s.hardness.clamp(0.0, 1.0) * 255.0).round() / 255.0;
-        (s.thickness.max(10.0) / 2.0, rim)
+        let radius = if tool == DrawTool::Brush { (s.thickness / 2.0).max(0.5) } else { s.thickness.max(10.0) / 2.0 };
+        let strength = if tool.is_eraser() { s.opacity.clamp(0.0, 1.0) } else { 1.0 };
+        (radius, s.hardness.clamp(0.0, 1.0), strength)
     }
 
-    /// The live region's area and coverage image, built once per change and shared by every
-    /// tile the overlay repaints for it.
-    fn live_frame(&mut self) -> Option<(DrawTool, Path, Option<PlacedCoverage>)> {
+    /// The live gesture's rect area (Ctrl-rect only) and coverage image, built once per change
+    /// and shared by every tile the overlay repaints for it.
+    fn live_frame(&mut self) -> Option<(DrawTool, Option<Path>, Option<PlacedCoverage>)> {
         let r = self.region.as_ref()?;
         if r.frame.as_ref().is_none_or(|(g, _, _)| *g != r.generation) {
-            let area = self.region_area(r);
-            let cov = match (r.tool.is_eraser(), r.rect_mode) {
-                (false, _) => None,
-                (true, false) => r.coverage.as_ref().map(|(at, b)| (*at, b.as_image())),
-                (true, true) => self
-                    .to_region(*area.bounds())
-                    .map(|at| (at, self.erase_coverage(r, at).as_image())),
+            let (area, cov) = if r.rect_mode {
+                let area = Path::rect(r.rect, None);
+                let cov = if r.tool.is_eraser() {
+                    self.to_region(r.rect).map(|at| (at, self.stroke_coverage(r, at).as_image()))
+                } else {
+                    None
+                };
+                (Some(area), cov)
+            } else {
+                (None, r.coverage.as_ref().map(|(at, b)| (*at, b.as_image())))
             };
             let generation = r.generation;
             self.region.as_mut().expect("checked above").frame = Some((generation, area, cov));
@@ -546,29 +514,6 @@ impl Editor {
             self.layer_images = (self.revision, images);
         }
         self.layer_images.1.clone()
-    }
-
-    /// The area the current region gesture covers, for the preview.
-    pub fn region_preview(&self) -> Option<(DrawTool, Path)> {
-        self.region.as_ref().map(|r| (r.tool, self.region_area(r)))
-    }
-
-    fn region_area(&self, r: &RegionGesture) -> Path {
-        if r.rect_mode {
-            return Path::rect(r.rect, None);
-        }
-        let mut stroke = Paint::default();
-        stroke.set_style(PaintStyle::Stroke);
-        stroke.set_stroke_width(self.settings(r.tool).thickness.max(10.0));
-        stroke.set_stroke_cap(PaintCap::Round);
-        stroke.set_stroke_join(PaintJoin::Round);
-        let src = r.path.snapshot();
-        let mut out = PathBuilder::new();
-        if skia_safe::path_utils::fill_path_with_paint(&src, &stroke, &mut out, None, None) {
-            out.detach()
-        } else {
-            Path::new()
-        }
     }
 
     /// The effect source for blur or pixelize at the tool's strength. Built from the base
@@ -641,8 +586,8 @@ impl Editor {
 
     fn end_region(&mut self) {
         let Some(r) = self.region.take() else { return };
-        let area = self.region_area(&r);
-        let Some(region) = self.to_region(*area.bounds()) else {
+        let region = if r.rect_mode { self.to_region(r.rect) } else { r.drawn };
+        let Some(region) = region else {
             return;
         };
         // The preview was repainted a segment at a time; whatever the commit does (an eraser
@@ -653,15 +598,29 @@ impl Editor {
         });
         let clip = r.clip.clone();
         match r.tool {
+            DrawTool::Brush => {
+                let cov = self.stroke_coverage(&r, region);
+                let s = self.settings(DrawTool::Brush);
+                let (color, opacity) = (s.color, s.opacity);
+                self.apply_region_op(Layer::Paint, region, |d| {
+                    d.paint_coverage(&cov, region.left, region.top, color, opacity, clip.as_ref())
+                });
+            }
             DrawTool::Blur | DrawTool::Pixelize => {
                 let src = self.effect_source(r.tool).clone();
-                self.apply_region_op(Layer::Effects, region, |d| {
-                    d.apply_effect(&src, &area, clip.as_ref())
-                });
+                if r.rect_mode {
+                    let area = Path::rect(r.rect, None);
+                    self.apply_region_op(Layer::Effects, region, |d| d.apply_effect(&src, &area, clip.as_ref()));
+                } else {
+                    let cov = self.stroke_coverage(&r, region);
+                    self.apply_region_op(Layer::Effects, region, |d| {
+                        d.apply_effect_coverage(&src, &cov, region.left, region.top, clip.as_ref())
+                    });
+                }
             }
             // A no-op erase must not materialise an untouched layer.
             DrawTool::FilterEraser if self.doc.has_effects => {
-                let cov = self.erase_coverage(&r, region);
+                let cov = self.stroke_coverage(&r, region);
                 self.apply_region_op(Layer::Effects, region, |d| {
                     d.erase_effects_coverage(&cov, region.left, region.top, clip.as_ref())
                 });
@@ -669,17 +628,17 @@ impl Editor {
             DrawTool::Eraser if self.doc.has_paint => {
                 // Shapes and text are baked into paint, so this erases them by touch; the
                 // effects layer is the Filter Eraser's job and is left alone.
-                let cov = self.erase_coverage(&r, region);
+                let cov = self.stroke_coverage(&r, region);
                 self.apply_region_op(Layer::Paint, region, |d| {
                     d.erase_paint_coverage(&cov, region.left, region.top, clip.as_ref())
                 });
             }
             DrawTool::AbsoluteEraser => {
-                let cov = self.erase_coverage(&r, region);
+                let cov = self.stroke_coverage(&r, region);
                 self.apply_region_op(Layer::Absolute, region, |d| {
                     d.absolute_erase_coverage(&cov, region.left, region.top, clip.as_ref())
                 });
-                let b = *area.bounds();
+                let b = if r.rect_mode { r.rect } else { Rect::from_irect(region) };
                 self.absolute_bounds = Some(match self.absolute_bounds {
                     Some(mut a) => {
                         a.join(b);
@@ -692,18 +651,20 @@ impl Editor {
         }
     }
 
-    /// Soft-eraser coverage over `region`: an opaque greyscale bitmap whose luminance is the
-    /// erase strength. Brush mode is the coverage stamped while the stroke was drawn (radial
-    /// discs, centre 100%, rim = hardness, combined with Lighten so overlaps never compound
-    /// past the profile), cropped to `region`. Rect mode fills flat at full strength.
-    fn erase_coverage(&self, r: &RegionGesture, region: IRect) -> Bitmap {
+    /// The gesture's coverage over `region`: an opaque greyscale bitmap whose luminance is the
+    /// strength. A stroke is the coverage built while it was drawn (hardness and, for erasers,
+    /// opacity included), cropped to `region`; a Ctrl-rect fills flat, an eraser's at its
+    /// opacity.
+    fn stroke_coverage(&self, r: &RegionGesture, region: IRect) -> Bitmap {
         let mut cov = document::new_bitmap(region.width(), region.height());
         cov.erase_color(Color::BLACK);
         document::with_canvas(&mut cov, |c| {
             c.translate((-region.left as f32, -region.top as f32));
             if r.rect_mode {
+                let strength = if r.tool.is_eraser() { self.settings(r.tool).opacity.clamp(0.0, 1.0) } else { 1.0 };
+                let v = (strength * 255.0).round() as u8;
                 let mut fill = Paint::default();
-                fill.set_color(Color::WHITE);
+                fill.set_color(Color::from_rgb(v, v, v));
                 c.draw_rect(r.rect, &fill);
             } else if let Some((at, stamped)) = &r.coverage {
                 c.draw_image(stamped.as_image(), (at.left, at.top), None);
@@ -726,14 +687,8 @@ impl Editor {
                 None => r,
             });
         };
-        if let Some(b) = &self.brush {
-            add(
-                *b.stroke.path().bounds(),
-                b.stroke.settings.thickness / 2.0 + 2.0,
-            );
-        }
         if let Some((v, _)) = &self.shape {
-            add(v.compute_bounds(), v.thickness / 2.0 + 44.0);
+            add(v.compute_bounds(), v.padding());
         }
         // Only the latest segment changes on screen: earlier stamps and outline stay put.
         if let Some(r) = &self.region {
@@ -746,7 +701,7 @@ impl Editor {
                     r.prev.x.max(r.last.x),
                     r.prev.y.max(r.last.y),
                 );
-                add(segment, self.settings(r.tool).thickness.max(10.0) / 2.0 + 2.0);
+                add(segment, self.stroke_profile(r.tool).0 + 2.0);
             }
         }
         if let Some(t) = &self.text {
@@ -765,7 +720,7 @@ impl Editor {
         // document revision or per gesture step, never rebuilt here.
         let live = self.live_frame();
         let tool = live.as_ref().map(|(t, _, _)| *t);
-        let area = live.as_ref().map(|(_, a, _)| a.clone());
+        let area = live.as_ref().and_then(|(_, a, _)| a.clone());
         let live_cov = live.and_then(|(_, _, c)| c);
         let clip = self.region.as_ref().and_then(|r| r.clip.clone());
         let live_fx = match tool {
@@ -802,14 +757,19 @@ impl Editor {
             draw_layer(fx, tool == Some(DrawTool::FilterEraser));
         }
 
-        // Blur and pixelize preview the source under the brushed area, below the paint.
-        if let (Some(src), Some(area)) = (&live_fx, &area) {
+        // Blur and pixelize preview the source under the brushed area, below the paint: a
+        // Ctrl-rect hard-edged, a stroke through its soft coverage.
+        if let Some(src) = &live_fx {
             canvas.save();
             if let Some(c) = &clip {
                 canvas.clip_path(c, None, true);
             }
-            canvas.clip_path(area, None, true);
-            canvas.draw_image(src, (0, 0), None);
+            if let Some(area) = &area {
+                canvas.clip_path(area, None, true);
+                canvas.draw_image(src, (0, 0), None);
+            } else if let Some((reg, cov)) = &live_cov {
+                document::draw_through_coverage(canvas, src, cov, reg.left, reg.top);
+            }
             canvas.restore();
         }
 
@@ -819,12 +779,16 @@ impl Editor {
             draw_layer(paint, tool == Some(DrawTool::Eraser));
         }
 
-        if let Some((path, paint, clip)) = self.brush_preview() {
+        // The live brush stroke: its coverage, in the brush colour, at the brush opacity.
+        if tool == Some(DrawTool::Brush)
+            && let Some((reg, cov)) = &live_cov
+        {
+            let s = self.settings(DrawTool::Brush);
             canvas.save();
-            if let Some(c) = clip {
+            if let Some(c) = &clip {
                 canvas.clip_path(c, None, true);
             }
-            canvas.draw_path(&path, &paint);
+            canvas.draw_image(cov, (reg.left, reg.top), Some(&document::tint_paint(s.color, s.opacity)));
             canvas.restore();
         }
         if let Some(v) = self.shape_preview() {
@@ -875,12 +839,11 @@ impl Editor {
     // ---- Gesture plumbing -------------------------------------------------------------------
 
     pub fn is_drawing(&self) -> bool {
-        self.brush.is_some() || self.shape.is_some() || self.region.is_some()
+        self.shape.is_some() || self.region.is_some()
     }
 
     /// Mouse up: commits whatever gesture is live.
     pub fn end_gesture(&mut self) {
-        self.end_brush();
         self.end_shape();
         self.end_region();
     }
@@ -960,108 +923,6 @@ fn update_shape(v: &mut VectorObject, start: Point, cur: Point) {
             v.points_up = cur.y <= start.y;
         }
     }
-}
-
-/// Stamp centres along one segment, `radius * 0.35` apart, the end included and the start
-/// left to the previous segment: the points [`flatten_polyline`] gives that segment.
-fn segment_stamps(a: Point, b: Point, radius: f32) -> Vec<Point> {
-    let spacing = (radius * 0.35).max(1.0);
-    let (dx, dy) = (b.x - a.x, b.y - a.y);
-    let steps = (((dx * dx + dy * dy).sqrt() / spacing) as i32).max(1);
-    (1..=steps)
-        .map(|s| {
-            let t = s as f32 / steps as f32;
-            Point::new(a.x + dx * t, a.y + dy * t)
-        })
-        .collect()
-}
-
-/// Lays radial eraser stamps into a coverage bitmap that grows to hold them. It grows with a
-/// margin, so a stroke reallocates a handful of times rather than on every move.
-fn stamp(
-    coverage: &mut Option<(IRect, Bitmap)>,
-    frame: (i32, i32),
-    points: &[Point],
-    (radius, rim): (f32, f32),
-) {
-    const MARGIN: i32 = 128;
-    let Some(first) = points.first() else { return };
-    let mut need = Rect::from_xywh(first.x, first.y, 0.0, 0.0);
-    for p in points {
-        need.join(Rect::from_xywh(p.x, p.y, 0.0, 0.0));
-    }
-    let need = IRect::from_ltrb(
-        (need.left - radius - 1.0).floor() as i32,
-        (need.top - radius - 1.0).floor() as i32,
-        (need.right + radius + 1.0).ceil() as i32,
-        (need.bottom + radius + 1.0).ceil() as i32,
-    );
-    let frame_rect = IRect::from_wh(frame.0, frame.1);
-    let Some(need) = IRect::intersect(&need, &frame_rect) else {
-        return;
-    };
-    if !coverage.as_ref().is_some_and(|(at, _)| at.contains(need)) {
-        let grown = match coverage.as_ref() {
-            Some((at, _)) => IRect::join(at, &need),
-            None => need,
-        };
-        let grown = IRect::from_ltrb(
-            grown.left - MARGIN,
-            grown.top - MARGIN,
-            grown.right + MARGIN,
-            grown.bottom + MARGIN,
-        );
-        let grown = IRect::intersect(&grown, &frame_rect).unwrap_or(need);
-        let mut bitmap = document::new_bitmap(grown.width(), grown.height());
-        bitmap.erase_color(Color::BLACK);
-        if let Some((at, old)) = coverage.as_ref() {
-            document::with_canvas(&mut bitmap, |c| {
-                c.draw_image(old.as_image(), (at.left - grown.left, at.top - grown.top), None);
-            });
-        }
-        *coverage = Some((grown, bitmap));
-    }
-    let (at, bitmap) = coverage.as_mut().expect("allocated above");
-    let at = *at;
-    let stops = [Color4f::new(1.0, 1.0, 1.0, 1.0), Color4f::new(rim, rim, rim, 1.0)];
-    let positions = [0.0f32, 1.0];
-    let gradient = Gradient::new(
-        Colors::new(&stops, Some(&positions), TileMode::Clamp, None),
-        Interpolation::default(),
-    );
-    document::with_canvas(bitmap, |c| {
-        c.translate((-at.left as f32, -at.top as f32));
-        let mut paint = Paint::default();
-        paint.set_anti_alias(true);
-        paint.set_blend_mode(BlendMode::Lighten);
-        for pt in points {
-            paint.set_shader(shaders::radial_gradient((*pt, radius), &gradient, None));
-            c.draw_circle(*pt, radius, &paint);
-        }
-    });
-}
-
-/// Samples a polyline into points spaced about `spacing` apart: the whole-stroke stamping
-/// the incremental [`segment_stamps`] must reproduce.
-#[cfg(test)]
-fn flatten_polyline(path: &Path, spacing: f32) -> Vec<Point> {
-    let verts = path.points();
-    let mut out = Vec::new();
-    let Some(first) = verts.first() else {
-        return out;
-    };
-    let spacing = spacing.max(1.0);
-    out.push(*first);
-    for w in verts.windows(2) {
-        let (a, b) = (w[0], w[1]);
-        let (dx, dy) = (b.x - a.x, b.y - a.y);
-        let steps = (((dx * dx + dy * dy).sqrt() / spacing) as i32).max(1);
-        for s in 1..=steps {
-            let t = s as f32 / steps as f32;
-            out.push(Point::new(a.x + dx * t, a.y + dy * t));
-        }
-    }
-    out
 }
 
 #[cfg(test)]
@@ -1204,24 +1065,6 @@ mod tests {
     }
 
     #[test]
-    fn incremental_stamps_match_whole_stroke_stamping() {
-        let pts = [
-            Point::new(10.0, 10.0),
-            Point::new(80.0, 25.0),
-            Point::new(81.0, 26.0),
-            Point::new(30.0, 140.0),
-        ];
-        let mut path = PathBuilder::new();
-        path.move_to(pts[0]);
-        let mut stepwise = vec![pts[0]];
-        for w in pts.windows(2) {
-            path.line_to(w[1]);
-            stepwise.extend(segment_stamps(w[0], w[1], 12.0));
-        }
-        assert_eq!(stepwise, flatten_polyline(&path.snapshot(), 12.0 * 0.35));
-    }
-
-    #[test]
     fn long_eraser_stroke_erases_along_its_whole_length() {
         let base = document::new_bitmap(1200, 100);
         base.erase_color(Color::from_rgb(0, 128, 0));
@@ -1255,6 +1098,68 @@ mod tests {
         let mut out = document::new_bitmap(100, 100);
         document::with_canvas(&mut out, |c| e.paint(c));
         assert_eq!(document::pixels(&out)[50 * out.row_bytes() + 50 * 4 + 3], 0);
+    }
+
+    #[test]
+    fn brush_hardness_softens_only_the_rim() {
+        let paint_at = |hardness: f32| {
+            let mut e = editor();
+            e.settings_mut(DrawTool::Brush).thickness = 20.0;
+            e.settings_mut(DrawTool::Brush).hardness = hardness;
+            e.begin_brush(Point::new(10.0, 50.0), None);
+            e.extend(Point::new(90.0, 50.0));
+            e.end_gesture();
+            (paint_alpha(&e, 50, 50), paint_alpha(&e, 50, 57))
+        };
+        assert_eq!(paint_at(1.0), (255, 255), "hard: solid out to the rim");
+        let (centre, rim) = paint_at(0.0);
+        // Hardness 0 has no solid core at all, as in hive: the centre pixel, 0.5 px off the
+        // line, is already a hair below full.
+        assert!(centre >= 250, "the centre line stays (almost) full ({centre})");
+        assert!(rim < 100, "soft: the rim fades ({rim})");
+    }
+
+    #[test]
+    fn brush_opacity_applies_once_to_the_whole_stroke() {
+        let mut e = editor();
+        e.settings_mut(DrawTool::Brush).thickness = 20.0;
+        e.settings_mut(DrawTool::Brush).opacity = 0.5;
+        e.begin_brush(Point::new(10.0, 50.0), None);
+        e.extend(Point::new(90.0, 50.0));
+        e.extend(Point::new(10.0, 50.0));
+        e.end_gesture();
+        assert_eq!(paint_alpha(&e, 50, 50), 128, "crossing itself does not build up");
+    }
+
+    #[test]
+    fn eraser_opacity_removes_that_fraction() {
+        let mut e = editor();
+        e.settings_mut(DrawTool::Brush).thickness = 40.0;
+        e.begin_brush(Point::new(0.0, 50.0), None);
+        e.extend(Point::new(100.0, 50.0));
+        e.end_gesture();
+        e.settings_mut(DrawTool::Eraser).opacity = 0.5;
+        e.settings_mut(DrawTool::Eraser).hardness = 1.0;
+        e.begin_region(DrawTool::Eraser, Point::new(20.0, 50.0), false, None);
+        e.extend(Point::new(80.0, 50.0));
+        e.end_gesture();
+        let a = paint_alpha(&e, 50, 50);
+        assert!((126..=129).contains(&a), "half erased ({a})");
+    }
+
+    #[test]
+    fn soft_blur_fades_into_the_frame() {
+        let mut e = editor();
+        e.settings_mut(DrawTool::Blur).thickness = 40.0;
+        e.settings_mut(DrawTool::Blur).hardness = 0.0;
+        e.begin_region(DrawTool::Blur, Point::new(20.0, 50.0), false, None);
+        e.extend(Point::new(80.0, 50.0));
+        e.end_gesture();
+        let fx = e.document().layer(Layer::Effects).unwrap();
+        let alpha = |x: usize, y: usize| document::pixels(fx)[y * fx.row_bytes() + x * 4 + 3];
+        assert_eq!(alpha(50, 50), 255);
+        let rim = alpha(50, 66);
+        assert!(rim > 0 && rim < 128, "the rim is partial ({rim})");
     }
 
     #[test]

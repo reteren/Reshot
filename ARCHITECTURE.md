@@ -109,24 +109,34 @@ previews Cyrillic perfectly and then draws it as empty boxes on the image. That 
 is why `FontEntry` carries `supports_cyrillic` and why the picker dims those rows — the
 preview cannot be trusted to show the failure by itself.
 
-## 4. Erasers: the strength model
+## 4. Soft strokes: hardness and coverage
 
-An eraser stroke is a stamp with a radial alpha gradient:
+Brush, blur, pixelation and the three erasers share one stroke model, taken from hive
+(`app/src/drawing/brush.ts`) and implemented in `reshot-core/src/soft.rs`:
 
 ```
-alpha(r) = 1.0                    at the centre, always 100%
-alpha(r) = falloff(r, hardness)   towards the rim
+core     = clamp(r * hardness, 0, r - 1)       never closer than 1 px to the rim
+alpha(d) = 1                                    d <= core
+alpha(d) = 1 - smoothstep((d - core) / (r - core))   core < d <= r
+alpha(d) = 0                                    d > r
 ```
 
-- `hardness = 1.0` gives a step: the whole disc erases fully, a hard round eraser.
-- `hardness = 0.0` fades from the centre to the rim, a soft patch.
-- The centre erases fully at any setting.
+`d` is the distance to the stroke's **segment**, not to a dab centre: each mouse move adds a
+capsule from the previous point to the new one, so a soft stroke is one continuous shape
+with no ripples from discrete dabs.
 
-Implementation: the stroke is rasterised into a greyscale **coverage bitmap** whose
-luminance is the erase strength. Overlapping stamps along the stroke are combined with
-`BlendMode::Lighten`, taking the maximum rather than accumulating, and the finished
-coverage is applied to the layer once with `BlendMode::DstOut`. Stamping semi-transparent
-discs directly would compound along the stroke and erase the middle of a soft line fully.
+The stroke is rasterised into a greyscale **coverage bitmap** whose luminance is the
+strength. Capsules keep the per-pixel maximum rather than accumulating, so a stroke never
+builds up where it passes over itself, and a move adds only its own capsule. How the
+finished coverage is used depends on the tool:
+
+- **Brush**: tinted with the colour and laid on the paint layer once, at the brush opacity.
+- **Blur, pixelation**: the effect source is drawn through it onto the effects layer.
+- **Erasers**: the eraser opacity is baked into the coverage, which is applied once with
+  `BlendMode::DstOut` (or accumulated into the punch-through mask for the Absolute Eraser).
+
+Shapes and lines are vectors until committed, so they soften differently: their outline is
+blurred by `width × (1 − hardness) × 0.35`, as hive does. Text has no hardness.
 
 ## 5. Undo and redo
 

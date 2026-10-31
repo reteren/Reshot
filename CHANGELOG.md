@@ -3,6 +3,25 @@
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and this
 project adheres to [Semantic Versioning](https://semver.org/).
 
+## [1.2.9] - Unreleased
+
+### Added
+
+- A **Hardness** slider for every tool but text, working as in hive: the brush is solid out
+  to that share of its radius and fades smoothly to its edge. Brush, blur, pixelation and
+  the three erasers get soft edges; shapes and lines a softened outline. 85% by default.
+
+### Changed
+
+- The erasers' **Opacity** is plain opacity now, how much a stroke removes; the soft edge it
+  used to stand for is the new Hardness slider.
+
+### Fixed
+
+- Opacity works for shapes, lines and text; the slider was there but changed nothing.
+- A brush stroke repaints only its newest piece on each move, like the erasers and effects,
+  instead of everything under the stroke so far.
+
 ## [1.2.8] - Unreleased (test build)
 
 ### Changed

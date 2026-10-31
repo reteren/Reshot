@@ -26,7 +26,7 @@ This file is the record of that, plus what is left.
 - **Separate audio tracks** recorded independently, so the tracks are chosen after the
   recording stops rather than mixed live
 - **Per-application audio** through Windows process loopback
-- **Soft erasers** with a Photoshop-style radial falloff
+- **Hardness** on every tool but text, with the soft-edge model from hive
 - **Half-Life 2 / Source styling** across the overlay, the tray menu and the settings
 - **Settings window rebuilt on Tauri** instead of WPF, then on gpui with the rest in 1.2.5
 - **Per-tool settings**: every tool keeps its own size, opacity and colour

@@ -134,7 +134,40 @@ impl CaptureDocument {
         self.has_paint = true;
     }
 
+    /// Bakes a soft brush stroke: its greyscale coverage, tinted with the brush colour and
+    /// applied at the stroke's opacity in one go, so the stroke never builds up over itself.
+    pub fn paint_coverage(
+        &mut self,
+        coverage: &Bitmap,
+        dx: i32,
+        dy: i32,
+        color: Color,
+        opacity: f32,
+        selection: Option<&Path>,
+    ) {
+        let image = coverage.as_image();
+        self.draw(Layer::Paint, selection, |c| {
+            c.draw_image(&image, (dx, dy), Some(&tint_paint(color, opacity)));
+        });
+        self.has_paint = true;
+    }
+
     // ---- Effects and hard erasers -----------------------------------------------------
+
+    /// Stamps effect-source pixels through a soft coverage: full strength in the brush's core,
+    /// fading over its rim into whatever was there before.
+    pub fn apply_effect_coverage(
+        &mut self,
+        source: &Bitmap,
+        coverage: &Bitmap,
+        dx: i32,
+        dy: i32,
+        selection: Option<&Path>,
+    ) {
+        let (src, cov) = (source.as_image(), coverage.as_image());
+        self.draw(Layer::Effects, selection, |c| draw_through_coverage(c, &src, &cov, dx, dy));
+        self.has_effects = true;
+    }
 
     /// Stamps effect-source pixels (the blurred or pixelated base) into `area`.
     pub fn apply_effect(&mut self, source: &Bitmap, area: &Path, selection: Option<&Path>) {
@@ -283,6 +316,31 @@ impl CaptureDocument {
             canvas.draw_image(layer.as_image(), (0, 0), None);
         }
     }
+}
+
+/// Paint that draws a greyscale coverage image as `color` at `opacity`: the coverage becomes
+/// alpha, the colour fills it.
+pub fn tint_paint(color: Color, opacity: f32) -> Paint {
+    // The opacity rides in the fill colour: a paint alpha would be applied to the coverage
+    // before the alpha filter, which reads red alone and would drop it.
+    let mut p = Paint::default();
+    let a = (opacity.clamp(0.0, 1.0) * 255.0).round() as u8;
+    let fill = color_filters::blend(color.with_a(a), BlendMode::SrcIn);
+    p.set_color_filter(fill.and_then(|f| color_filters::compose(f, coverage_alpha_filter())));
+    p
+}
+
+/// Draws `source` (frame-sized, at the origin) only where `coverage` (placed at `dx, dy`) says,
+/// by its strength, over whatever the canvas already holds.
+pub fn draw_through_coverage(canvas: &Canvas, source: &skia_safe::Image, coverage: &skia_safe::Image, dx: i32, dy: i32) {
+    let bounds = skia_safe::Rect::from_xywh(dx as f32, dy as f32, coverage.width() as f32, coverage.height() as f32);
+    canvas.save_layer(&skia_safe::canvas::SaveLayerRec::default().bounds(&bounds));
+    canvas.draw_image(source, (0, 0), None);
+    let mut keep = Paint::default();
+    keep.set_blend_mode(BlendMode::DstIn);
+    keep.set_color_filter(coverage_alpha_filter());
+    canvas.draw_image(coverage, (dx, dy), Some(&keep));
+    canvas.restore();
 }
 
 /// Maps a greyscale coverage bitmap to a pure alpha mask: alpha = red, rgb = 0.

@@ -42,10 +42,10 @@ is only started by the first press.
 - Brush, shapes, lines and arrows, text
 - Blur and pixelation with adjustable strength
 - Three erasers: normal, absolute (down to transparency), and one for filters
-- Photoshop-style soft erasing: the centre always erases fully, the rim follows a setting
+- Hardness on every tool but text: soft brushes, erasers, blur and pixelation edges
 - Eyedropper, full HSV picker, 16 swatches
 - 32 steps of undo
-- Every tool keeps its own size, opacity and colour
+- Every tool keeps its own size, opacity, hardness and colour
 
 **Text from an image (OCR)**
 

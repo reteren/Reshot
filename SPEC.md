@@ -91,15 +91,22 @@ Session rules:
 | `9` | Record video | |
 | `0` | Record audio | |
 
-Every tool keeps its **own** size, opacity and colour, so switching tools does not carry
-the previous tool's settings over.
+Every tool keeps its **own** size, opacity, hardness and colour, so switching tools does
+not carry the previous tool's settings over.
+
+**Hardness** (every tool but text, default 85%) works as in hive: a brush of radius `r` is
+solid out to `r × hardness` (always leaving a one-pixel anti-aliased rim) and fades to
+nothing at `r` along a smoothstep. A stroke is one continuous shape built from capsules
+between the mouse positions, so a soft stroke has a smooth edge with no dab ripples and
+never builds up where it passes over itself. Shapes and lines soften by blurring their
+outline by `width × (1 − hardness) × 0.35`.
 
 ## 6. Drawing
 
 ### 6.1 Brush
 
 - A full colour picker with hex entry.
-- Adjustable **opacity** and **thickness**, up to 200 px.
+- Adjustable **opacity**, **thickness** (up to 200 px) and **hardness**.
 - Brush strokes are **permanent raster**: once painted they cannot be selected and moved,
   only erased or undone.
 
@@ -127,19 +134,19 @@ the previous tool's settings over.
 
 - `Shift` while drawing opens the tool settings panel. The thin dotted strip above the
   toolbar does the same on click.
-- The panel adapts to the tool: erasers show size and the Photoshop-style opacity, effects
-  show size and strength with no colour, ink tools show size, opacity and the picker.
+- The panel adapts to the tool: every tool shows size, opacity (strength for effects) and,
+  except text, hardness; ink tools add the picker and text the font family.
 
 ## 7. Erasers
 
-All three share a size setting and the Photoshop-style **opacity**, which is a radial
-falloff rather than plain transparency:
+All three share size, **opacity** and **hardness**:
 
 - The eraser area is a disc of the given size.
-- **The centre always erases at 100%**, whatever the setting.
-- At 100% the whole disc erases everything it touches, a hard edge.
-- At 30% the rim erases at 30% and the strength rises smoothly towards the centre, a soft
-  gradient.
+- **Opacity** is how much it removes: at 50% one stroke takes away half of what is there,
+  and going over the same place again in the same stroke takes nothing more.
+- **Hardness** is the edge (see §5): at 100% the disc erases evenly out to a crisp rim, at
+  lower values the erase fades smoothly towards the rim.
+- A `Ctrl`-dragged rectangle erases evenly at the opacity, with a hard edge.
 
 | ID | Eraser | What it removes |
 |---|---|---|

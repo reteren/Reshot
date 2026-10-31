@@ -13,6 +13,7 @@ pub mod paths;
 pub mod selection;
 pub mod session;
 pub mod settings;
+pub mod soft;
 pub mod tools;
 
 pub use skia_safe as skia;
