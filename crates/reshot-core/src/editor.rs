@@ -6,7 +6,7 @@ use std::collections::HashMap;
 
 use skia_safe::gradient::{Colors, Gradient, Interpolation, shaders};
 use skia_safe::{
-    Bitmap, BlendMode, Color, Color4f, FilterMode, IRect, Image, MipmapMode, Paint, PaintCap,
+    Bitmap, BlendMode, Color, Color4f, Contains, FilterMode, IRect, Image, MipmapMode, Paint, PaintCap,
     PaintJoin, PaintStyle, Path, PathBuilder, Point, Rect, SamplingOptions, TileMode,
     image_filters,
 };
@@ -142,6 +142,9 @@ pub fn default_tool_settings() -> HashMap<ToolKey, BrushSettings> {
     ])
 }
 
+/// Eraser coverage placed in the frame: where it sits, and its pixels as an image.
+type PlacedCoverage = (IRect, Image);
+
 /// A region gesture in progress: brushed path or Ctrl-dragged rect.
 struct RegionGesture {
     tool: DrawTool,
@@ -160,7 +163,7 @@ struct RegionGesture {
     /// re-stamping the whole stroke, and the commit uses exactly what the preview showed.
     coverage: Option<(IRect, Bitmap)>,
     /// What every tile of one frame shares: the area and the coverage image at `generation`.
-    frame: Option<(u64, Path, Option<(IRect, Image)>)>,
+    frame: Option<(u64, Path, Option<PlacedCoverage>)>,
 }
 
 struct BrushGesture {
@@ -516,7 +519,7 @@ impl Editor {
 
     /// The live region's area and coverage image, built once per change and shared by every
     /// tile the overlay repaints for it.
-    fn live_frame(&mut self) -> Option<(DrawTool, Path, Option<(IRect, Image)>)> {
+    fn live_frame(&mut self) -> Option<(DrawTool, Path, Option<PlacedCoverage>)> {
         let r = self.region.as_ref()?;
         if r.frame.as_ref().is_none_or(|(g, _, _)| *g != r.generation) {
             let area = self.region_area(r);
@@ -1038,7 +1041,9 @@ fn stamp(
     });
 }
 
-/// Samples a polyline into points spaced about `spacing` apart.
+/// Samples a polyline into points spaced about `spacing` apart: the whole-stroke stamping
+/// the incremental [`segment_stamps`] must reproduce.
+#[cfg(test)]
 fn flatten_polyline(path: &Path, spacing: f32) -> Vec<Point> {
     let verts = path.points();
     let mut out = Vec::new();
@@ -1196,6 +1201,47 @@ mod tests {
         );
         e.end_gesture();
         assert!(e.live_bounds().is_none());
+    }
+
+    #[test]
+    fn incremental_stamps_match_whole_stroke_stamping() {
+        let pts = [
+            Point::new(10.0, 10.0),
+            Point::new(80.0, 25.0),
+            Point::new(81.0, 26.0),
+            Point::new(30.0, 140.0),
+        ];
+        let mut path = PathBuilder::new();
+        path.move_to(pts[0]);
+        let mut stepwise = vec![pts[0]];
+        for w in pts.windows(2) {
+            path.line_to(w[1]);
+            stepwise.extend(segment_stamps(w[0], w[1], 12.0));
+        }
+        assert_eq!(stepwise, flatten_polyline(&path.snapshot(), 12.0 * 0.35));
+    }
+
+    #[test]
+    fn long_eraser_stroke_erases_along_its_whole_length() {
+        let base = document::new_bitmap(1200, 100);
+        base.erase_color(Color::from_rgb(0, 128, 0));
+        let mut e = Editor::new(base);
+        e.begin_brush(Point::new(0.0, 50.0), None);
+        e.extend(Point::new(1200.0, 50.0));
+        e.end_gesture();
+        assert!(paint_alpha(&e, 600, 50) > 0);
+        e.settings_mut(DrawTool::Eraser).hardness = 1.0;
+        e.begin_region(DrawTool::Eraser, Point::new(20.0, 50.0), false, None);
+        // Far past the first allocation and its margin: the coverage has to grow, and what
+        // was stamped before each growth must survive it.
+        for x in (40..=1000).step_by(20) {
+            e.extend(Point::new(x as f32, 50.0));
+        }
+        e.end_gesture();
+        for x in [30, 300, 600, 990] {
+            assert_eq!(paint_alpha(&e, x, 50), 0, "erased at x = {x}");
+        }
+        assert!(paint_alpha(&e, 1150, 50) > 0, "past the stroke's end the paint survives");
     }
 
     #[test]

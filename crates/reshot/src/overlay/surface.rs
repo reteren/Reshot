@@ -54,7 +54,7 @@ impl Surface {
                     self.tiles.remove(&(tx, ty))
                 } else {
                     let rb = bmp.row_bytes();
-                    let img = frame_image::from_bgra(r.width() as u32, r.height() as u32, rb, document::pixels(&bmp));
+                    let img = frame_image::from_premultiplied_bgra(r.width() as u32, r.height() as u32, rb, document::pixels(&bmp));
                     self.tiles.insert((tx, ty), img)
                 };
                 self.stale.extend(old);

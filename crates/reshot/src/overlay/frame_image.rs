@@ -1,5 +1,6 @@
-//! Turning pixel buffers into gpui images. gpui keeps images as premultiplied BGRA, which is
-//! exactly what the capture and the skia layers produce, so this is a repack, not a convert.
+//! Turning pixel buffers into gpui images. gpui stores BGRA, but on Windows it blends image
+//! sprites as straight alpha (SRC_ALPHA, INV_SRC_ALPHA). The capture is opaque, so it is a
+//! plain repack; Skia layers are premultiplied and go through [`from_premultiplied_bgra`].
 
 use std::sync::Arc;
 
@@ -23,6 +24,44 @@ pub fn from_bgra(width: u32, height: u32, stride: usize, bgra: &[u8]) -> Arc<Ren
     Arc::new(RenderImage::new(SmallVec::from_elem(Frame::new(image), 1)))
 }
 
+/// [`from_bgra`] for premultiplied pixels. Handed over as they are, every partly
+/// transparent pixel would be multiplied by its alpha a second time when blended: the
+/// anti-aliased rim of a blur or a stroke came out darker than either side of it, a thin dark
+/// outline around every effect.
+pub fn from_premultiplied_bgra(width: u32, height: u32, stride: usize, bgra: &[u8]) -> Arc<RenderImage> {
+    let row = width as usize * 4;
+    let mut buf = Vec::with_capacity(row * height as usize);
+    for y in 0..height as usize {
+        buf.extend_from_slice(&bgra[y * stride..y * stride + row]);
+    }
+    for px in buf.chunks_exact_mut(4) {
+        let a = px[3] as u32;
+        if a != 0 && a != 255 {
+            for c in &mut px[..3] {
+                *c = ((*c as u32 * 255 + a / 2) / a).min(255) as u8;
+            }
+        }
+    }
+    let image = RgbaImage::from_raw(width, height, buf).expect("buffer matches the image size");
+    Arc::new(RenderImage::new(SmallVec::from_elem(Frame::new(image), 1)))
+}
+
 pub fn render_image(frame: &CapturedFrame) -> Arc<RenderImage> {
     from_bgra(frame.width, frame.height, frame.stride, &frame.pixels_bgra)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn premultiplied_pixels_reach_gpui_straight() {
+        // Half-transparent mid grey, premultiplied: 64 of 255 at alpha 128.
+        let premul = [64u8, 64, 64, 128, 0, 0, 0, 0, 10, 20, 30, 255];
+        let image = from_premultiplied_bgra(3, 1, 12, &premul);
+        let bytes = image.as_bytes(0).expect("one frame");
+        assert_eq!(&bytes[..4], &[128, 128, 128, 128], "straight colour, alpha kept");
+        assert_eq!(&bytes[4..8], &[0, 0, 0, 0], "fully transparent stays untouched");
+        assert_eq!(&bytes[8..], &[10, 20, 30, 255], "opaque pixels are already straight");
+    }
 }
