@@ -3,6 +3,18 @@
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and this
 project adheres to [Semantic Versioning](https://semver.org/).
 
+## [1.3.4] - Unreleased
+
+### Changed
+
+- Faster: where Desktop Duplication keeps failing (a still pointer whose state it never
+  reports), captures stop paying 40-150 ms for it before WGC takes the frame; it is retried
+  every tenth capture. The overlay opens without one more copy of the frame, an export
+  composites only the selected region instead of the whole desktop, overlay tiles convert
+  through a lookup table, OCR fills the engine's buffer directly, and recording reuses its
+  audio mix buffer and masks whole rows at a time.
+- Settings: the elevated autostart checkbox reads "As administrator".
+
 ## [1.3.3] - Unreleased (test build)
 
 ### Fixed
