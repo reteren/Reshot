@@ -28,6 +28,7 @@ use windows::core::{IInspectable, Interface, factory};
 use crate::{
     CapturedFrame, CapturedMonitor,
     native::{D3d, Monitor, blit},
+    nv12::{Crop, Nv12Converter},
 };
 
 const FIRST_FRAME_TIMEOUT: Duration = Duration::from_millis(1200);
@@ -104,6 +105,207 @@ impl Drop for MonitorStream {
             let _ = worker.join();
         }
     }
+}
+
+struct Nv12Frame {
+    pixels: Vec<u8>,
+}
+
+/// Cropped NV12 frames from the video processor, with BGRA readback as a safe runtime fallback.
+pub struct Nv12MonitorStream {
+    pub monitor: CapturedMonitor,
+    pub left: u32,
+    pub top: u32,
+    pub width: u32,
+    pub height: u32,
+    latest: Arc<Mutex<Option<Arc<Nv12Frame>>>>,
+    stop: Arc<AtomicBool>,
+    wake: SyncSender<()>,
+    worker: Option<JoinHandle<()>>,
+}
+
+impl Nv12MonitorStream {
+    pub fn copy_frame(&self, destination: &mut [u8]) -> Result<bool> {
+        let Some(frame) = self.latest.lock().ok().and_then(|guard| guard.clone()) else {
+            return Ok(false);
+        };
+        if destination.len() != frame.pixels.len() {
+            bail!("NV12 destination size mismatch");
+        }
+        destination.copy_from_slice(&frame.pixels);
+        Ok(true)
+    }
+}
+
+impl Drop for Nv12MonitorStream {
+    fn drop(&mut self) {
+        self.stop.store(true, Ordering::Release);
+        let _ = self.wake.try_send(());
+        if let Some(worker) = self.worker.take() {
+            let _ = worker.join();
+        }
+    }
+}
+
+pub(crate) fn start_nv12_stream(monitor: Monitor, crop: Crop) -> Result<Nv12MonitorStream> {
+    if !GraphicsCaptureSession::IsSupported()? {
+        bail!("Windows.Graphics.Capture is unsupported");
+    }
+    request_borderless_access();
+    let info = monitor.info.clone();
+    let handle = monitor.handle.0 as isize;
+    let (ready_tx, ready_rx) = mpsc::sync_channel(1);
+    let latest = Arc::new(Mutex::new(None));
+    let stop = Arc::new(AtomicBool::new(false));
+    let worker_latest = Arc::clone(&latest);
+    let worker_stop = Arc::clone(&stop);
+    let worker = thread::Builder::new()
+        .name("reshot-wgc-nv12".into())
+        .spawn(move || {
+            // SAFETY: This worker owns its WinRT apartment until capture ends.
+            let initialized = unsafe {
+                windows::Win32::System::WinRT::RoInitialize(
+                    windows::Win32::System::WinRT::RO_INIT_MULTITHREADED,
+                )
+            }
+            .is_ok();
+            let monitor = Monitor {
+                handle: HMONITOR(handle as *mut _),
+                info,
+            };
+            let _ = nv12_stream_worker(monitor, crop, worker_latest, worker_stop, ready_tx);
+            if initialized {
+                // SAFETY: RoInitialize succeeded on this same worker thread.
+                unsafe { windows::Win32::System::WinRT::RoUninitialize() };
+            }
+        })?;
+    match ready_rx.recv_timeout(FIRST_FRAME_TIMEOUT) {
+        Ok(Ok(wake)) => Ok(Nv12MonitorStream {
+            monitor: monitor.info,
+            left: crop.left,
+            top: crop.top,
+            width: crop.width,
+            height: crop.height,
+            latest,
+            stop,
+            wake,
+            worker: Some(worker),
+        }),
+        Ok(Err(message)) => {
+            stop.store(true, Ordering::Release);
+            let _ = worker.join();
+            bail!("{message}")
+        }
+        Err(error) => {
+            stop.store(true, Ordering::Release);
+            let _ = worker.join();
+            bail!("WGC NV12 stream startup: {error}")
+        }
+    }
+}
+
+fn nv12_stream_worker(
+    monitor: Monitor,
+    crop: Crop,
+    latest: Arc<Mutex<Option<Arc<Nv12Frame>>>>,
+    stop: Arc<AtomicBool>,
+    ready: SyncSender<std::result::Result<SyncSender<()>, String>>,
+) -> Result<()> {
+    let setup = (|| -> Result<_> {
+        let d3d = D3d::create()?;
+        let converter = Nv12Converter::new(&d3d, monitor.info.width, monitor.info.height, crop)?;
+        let item = create_item_monitor(monitor.handle)?;
+        let (session, wake) = Session::new(&d3d, item, true)?;
+        Ok((d3d, converter, session, wake))
+    })();
+    let (d3d, converter, session, wake) = match setup {
+        Ok(value) => value,
+        Err(error) => {
+            let _ = ready.send(Err(format!("{error:#}")));
+            return Err(error);
+        }
+    };
+    ready.send(Ok(session.wake.clone())).ok();
+    let mut converter = Some(converter);
+    while !stop.load(Ordering::Acquire) {
+        if wake.recv_timeout(Duration::from_millis(50)).is_err() {
+            continue;
+        }
+        if stop.load(Ordering::Acquire) {
+            break;
+        }
+        while let Ok(frame) = session.pool.TryGetNextFrame() {
+            let result = read_texture(&frame).and_then(|texture| {
+                if let Some(gpu) = &converter {
+                    match gpu.convert(&d3d, &texture) {
+                        Ok(pixels) => return Ok(pixels),
+                        Err(error) => {
+                            log::warn!("GPU NV12 conversion failed; using BGRA readback and CPU conversion: {error:#}");
+                            converter = None;
+                        }
+                    }
+                }
+                let (width, height, bgra) = d3d.read_texture(&texture)?;
+                bgra_to_nv12(&bgra, width, height, crop)
+            });
+            let _ = frame.Close();
+            match result {
+                Ok(pixels) => {
+                    if let Ok(mut guard) = latest.lock() {
+                        *guard = Some(Arc::new(Nv12Frame { pixels }));
+                    }
+                }
+                Err(error) => log::warn!("WGC NV12 frame: {error:#}"),
+            }
+        }
+    }
+    Ok(())
+}
+
+fn bgra_to_nv12(bgra: &[u8], source_width: u32, source_height: u32, crop: Crop) -> Result<Vec<u8>> {
+    if crop
+        .left
+        .checked_add(crop.width)
+        .is_none_or(|x| x > source_width)
+        || crop
+            .top
+            .checked_add(crop.height)
+            .is_none_or(|y| y > source_height)
+    {
+        bail!("NV12 fallback crop exceeds WGC frame");
+    }
+    let (width, height) = (crop.width as usize, crop.height as usize);
+    let mut out = vec![0; width * height * 3 / 2];
+    let yuv = |pixel: &[u8]| {
+        let (b, g, r) = (pixel[0] as f32, pixel[1] as f32, pixel[2] as f32);
+        let y = 16.0 + 0.182586 * r + 0.614231 * g + 0.062007 * b;
+        let u = 128.0 - 0.100644 * r - 0.338572 * g + 0.439216 * b;
+        let v = 128.0 + 0.439216 * r - 0.398942 * g - 0.040274 * b;
+        (y.round().clamp(16.0, 235.0) as u8, u, v)
+    };
+    for y in (0..height).step_by(2) {
+        for x in (0..width).step_by(2) {
+            let mut u_sum = 0.0;
+            let mut v_sum = 0.0;
+            for dy in 0..2 {
+                for dx in 0..2 {
+                    let source_index = ((crop.top as usize + y + dy) * source_width as usize
+                        + crop.left as usize
+                        + x
+                        + dx)
+                        * 4;
+                    let (luma, u, v) = yuv(&bgra[source_index..source_index + 4]);
+                    out[(y + dy) * width + x + dx] = luma;
+                    u_sum += u;
+                    v_sum += v;
+                }
+            }
+            let uv_index = width * height + (y / 2) * width + x;
+            out[uv_index] = (u_sum / 4.0).round().clamp(16.0, 240.0) as u8;
+            out[uv_index + 1] = (v_sum / 4.0).round().clamp(16.0, 240.0) as u8;
+        }
+    }
+    Ok(out)
 }
 
 pub(crate) fn start_stream(monitor: Monitor) -> Result<MonitorStream> {
@@ -275,10 +477,16 @@ fn read_frame(
     d3d: &D3d,
     frame: &windows::Graphics::Capture::Direct3D11CaptureFrame,
 ) -> Result<(u32, u32, Vec<u8>)> {
+    d3d.read_texture(&read_texture(frame)?)
+}
+
+fn read_texture(
+    frame: &windows::Graphics::Capture::Direct3D11CaptureFrame,
+) -> Result<ID3D11Texture2D> {
     let surface = frame.Surface()?;
     let access: IDirect3DDxgiInterfaceAccess = surface.cast()?;
-    let texture: ID3D11Texture2D = unsafe { access.GetInterface()? };
-    d3d.read_texture(&texture)
+    // SAFETY: The WGC frame owns its Direct3D surface until it is closed.
+    unsafe { access.GetInterface().map_err(Into::into) }
 }
 
 fn create_item_monitor(handle: HMONITOR) -> Result<GraphicsCaptureItem> {

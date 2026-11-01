@@ -1,5 +1,7 @@
 //! Deterministic ffmpeg grammar. The command line is passed directly to CreateProcessW.
 
+use reshot_capture::RecordingPixelFormat;
+
 pub struct FfmpegArgs;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -80,9 +82,45 @@ impl FfmpegArgs {
         output_path: &str,
         tuning: H264Tuning,
     ) -> String {
+        Self::video_with_format(
+            width,
+            height,
+            fps,
+            bitrate,
+            encoder,
+            output_path,
+            tuning,
+            RecordingPixelFormat::Bgra,
+        )
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub fn video_with_format(
+        width: u32,
+        height: u32,
+        fps: u32,
+        bitrate: u32,
+        encoder: &str,
+        output_path: &str,
+        tuning: H264Tuning,
+        format: RecordingPixelFormat,
+    ) -> String {
+        let (input_format, conversion, encoder_format) = match format {
+            RecordingPixelFormat::Bgra => (
+                "bgra",
+                " -vf scale=out_color_matrix=bt709:out_range=tv",
+                "yuv420p",
+            ),
+            RecordingPixelFormat::Nv12 => ("nv12", "", "nv12"),
+        };
+        let x264_color = if encoder == "libx264" {
+            " -x264-params colorprim=bt709:transfer=bt709:colormatrix=bt709:range=tv"
+        } else {
+            ""
+        };
         format!(
-            "-hide_banner -loglevel error -y -f rawvideo -pixel_format bgra -video_size {width}x{height} -framerate {fps} -i - -an -c:v {encoder}{} -b:v {bitrate} -pix_fmt yuv420p -movflags +faststart \"{output_path}\"",
-            Self::tuning(tuning)
+            "-hide_banner -loglevel error -y -f rawvideo -pixel_format {input_format} -video_size {width}x{height} -framerate {fps} -i - -an -c:v {encoder}{}{x264_color} -b:v {bitrate}{conversion} -pix_fmt {encoder_format} -colorspace bt709 -color_primaries bt709 -color_trc bt709 -color_range tv -movflags +faststart \"{output_path}\"",
+            Self::tuning(tuning),
         )
     }
 
@@ -170,7 +208,28 @@ mod tests {
                 r"C:\Videos\recording.mp4",
                 NONE
             ),
-            r#"-hide_banner -loglevel error -y -f rawvideo -pixel_format bgra -video_size 1920x1080 -framerate 60 -i - -an -c:v libx264 -b:v 8000000 -pix_fmt yuv420p -movflags +faststart "C:\Videos\recording.mp4""#
+            r#"-hide_banner -loglevel error -y -f rawvideo -pixel_format bgra -video_size 1920x1080 -framerate 60 -i - -an -c:v libx264 -x264-params colorprim=bt709:transfer=bt709:colormatrix=bt709:range=tv -b:v 8000000 -vf scale=out_color_matrix=bt709:out_range=tv -pix_fmt yuv420p -colorspace bt709 -color_primaries bt709 -color_trc bt709 -color_range tv -movflags +faststart "C:\Videos\recording.mp4""#
+        );
+    }
+
+    #[test]
+    fn nv12_input_skips_color_conversion_and_keeps_bitrate() {
+        let args = FfmpegArgs::video_with_format(
+            1920,
+            1080,
+            60,
+            8_000_000,
+            "libx264",
+            r"C:\Videos\recording.mp4",
+            NONE,
+            RecordingPixelFormat::Nv12,
+        );
+        assert!(args.contains("-pixel_format nv12"));
+        assert!(args.contains("-pix_fmt nv12"));
+        assert!(args.contains("-b:v 8000000"));
+        assert!(!args.contains("-vf scale"));
+        assert!(
+            args.contains("-x264-params colorprim=bt709:transfer=bt709:colormatrix=bt709:range=tv")
         );
     }
 
@@ -335,7 +394,7 @@ mod tests {
                 r"C:\Videos\recording.mp4",
                 FfmpegArgs::default_tuning("libx264")
             ),
-            r#"-hide_banner -loglevel error -y -f rawvideo -pixel_format bgra -video_size 1920x1080 -framerate 60 -i - -an -c:v libx264 -preset veryfast -tune zerolatency -b:v 8000000 -pix_fmt yuv420p -movflags +faststart "C:\Videos\recording.mp4""#
+            r#"-hide_banner -loglevel error -y -f rawvideo -pixel_format bgra -video_size 1920x1080 -framerate 60 -i - -an -c:v libx264 -preset veryfast -tune zerolatency -x264-params colorprim=bt709:transfer=bt709:colormatrix=bt709:range=tv -b:v 8000000 -vf scale=out_color_matrix=bt709:out_range=tv -pix_fmt yuv420p -colorspace bt709 -color_primaries bt709 -color_trc bt709 -color_range tv -movflags +faststart "C:\Videos\recording.mp4""#
         );
         let mf = FfmpegArgs::video(
             2560,

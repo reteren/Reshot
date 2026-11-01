@@ -10,7 +10,7 @@ use std::thread::{self, JoinHandle};
 use std::time::{Duration, Instant};
 
 use anyhow::{Context, Result, bail};
-use reshot_capture::{MonitorStream, ScreenCaptureService};
+use reshot_capture::{RecordingMonitorStream, RecordingPixelFormat, ScreenCaptureService};
 use windows::Win32::Media::{timeBeginPeriod, timeEndPeriod};
 
 use crate::{
@@ -44,8 +44,10 @@ impl FrameWriter for Mp4VideoEncoder {
     }
 }
 
-type WriterFactory =
-    Box<dyn FnOnce(&Path, u32, u32, u32, u32) -> Result<Box<dyn FrameWriter>> + Send>;
+type WriterFactory = Box<
+    dyn FnOnce(&Path, u32, u32, u32, u32, RecordingPixelFormat) -> Result<Box<dyn FrameWriter>>
+        + Send,
+>;
 
 struct TimerPeriod {
     active: bool,
@@ -135,11 +137,10 @@ impl VideoRecorder {
             sources,
             shape_mask,
             mask_stride,
-            Box::new(|path, w, h, fps, bitrate| {
-                Ok(
-                    Box::new(Mp4VideoEncoder::new(path, w, h, fps, bitrate, None)?)
-                        as Box<dyn FrameWriter>,
-                )
+            Box::new(|path, w, h, fps, bitrate, format| {
+                Ok(Box::new(Mp4VideoEncoder::new_with_format(
+                    path, w, h, fps, bitrate, None, format,
+                )?) as Box<dyn FrameWriter>)
             }),
             TimerPeriod::raise(),
         )
@@ -164,15 +165,11 @@ impl VideoRecorder {
         if fps == 0 || rect_width == 0 || rect_height == 0 {
             bail!("invalid recording dimensions or fps");
         }
-        let stream = capture.start_monitor_stream(rect_left, rect_top)?;
-        let monitor = &stream.monitor;
-        if monitor.width < 2 || monitor.height < 2 {
-            bail!("monitor smaller than 2x2");
-        }
-        let crop_left = (rect_left - monitor.left).clamp(0, monitor.width as i32 - 2) as u32;
-        let crop_top = (rect_top - monitor.top).clamp(0, monitor.height as i32 - 2) as u32;
-        let width = (rect_width.min(monitor.width - crop_left) & !1).max(2);
-        let height = (rect_height.min(monitor.height - crop_top) & !1).max(2);
+        let stream =
+            capture.start_recording_stream(rect_left, rect_top, rect_width, rect_height)?;
+        let width = stream.width;
+        let height = stream.height;
+        let format = stream.pixel_format();
         let mask = shape_mask.map(|bytes| ShapeMask {
             bytes,
             width: rect_width,
@@ -211,7 +208,7 @@ impl VideoRecorder {
         let mic_pcm = mic_audio.as_ref().map(|_| temp_path("mic.pcm"));
         let system_file = system_pcm.as_ref().map(File::create).transpose()?;
         let mic_file = mic_pcm.as_ref().map(File::create).transpose()?;
-        let writer = writer_factory(&temp_video, width, height, fps, bitrate)?;
+        let writer = writer_factory(&temp_video, width, height, fps, bitrate, format)?;
         let abort_writer = writer.abort();
         let stop = Arc::new(AtomicBool::new(false));
         let video_stop = Arc::clone(&stop);
@@ -220,8 +217,7 @@ impl VideoRecorder {
             .name("reshot-video".into())
             .spawn(move || {
                 video_loop(
-                    stream, writer, video_stop, started_tx, crop_left, crop_top, width, height,
-                    fps, mask,
+                    stream, writer, video_stop, started_tx, width, height, fps, mask,
                 )
             })?;
         let audio_worker = if system_audio.is_some() || mic_audio.is_some() {
@@ -424,22 +420,26 @@ impl Drop for VideoRecorder {
 
 #[allow(clippy::too_many_arguments)]
 fn video_loop(
-    stream: MonitorStream,
+    stream: RecordingMonitorStream,
     mut writer: Box<dyn FrameWriter>,
     stop: Arc<AtomicBool>,
     started: mpsc::SyncSender<()>,
-    left: u32,
-    top: u32,
     width: u32,
     height: u32,
     fps: u32,
     mask: Option<ShapeMask>,
 ) -> Result<()> {
-    let mut buffer = vec![0u8; width as usize * height as usize * 4];
+    let format = stream.pixel_format();
+    let pixels = width as usize * height as usize;
+    let mut buffer = vec![
+        0u8;
+        match format {
+            RecordingPixelFormat::Bgra => pixels * 4,
+            RecordingPixelFormat::Nv12 => pixels * 3 / 2,
+        }
+    ];
     let wait_deadline = Instant::now() + Duration::from_secs(3);
-    while !stop.load(Ordering::Acquire)
-        && !stream.copy_region(left, top, width, height, &mut buffer)?
-    {
+    while !stop.load(Ordering::Acquire) && !stream.copy_frame(&mut buffer)? {
         if Instant::now() >= wait_deadline {
             let _ = started.send(());
             bail!("no video frame within three seconds");
@@ -453,17 +453,28 @@ fn video_loop(
     let clock = Instant::now();
     let mut frame_index = 0u64;
     while !stop.load(Ordering::Acquire) {
-        if stream.copy_region(left, top, width, height, &mut buffer)? {
+        if stream.copy_frame(&mut buffer)? {
             if let Some(mask) = &mask {
-                apply_mask(
-                    &mut buffer,
-                    width,
-                    height,
-                    Some(&mask.bytes),
-                    mask.width,
-                    mask.height,
-                    mask.stride,
-                );
+                match format {
+                    RecordingPixelFormat::Bgra => apply_mask(
+                        &mut buffer,
+                        width,
+                        height,
+                        Some(&mask.bytes),
+                        mask.width,
+                        mask.height,
+                        mask.stride,
+                    ),
+                    RecordingPixelFormat::Nv12 => apply_nv12_mask(
+                        &mut buffer,
+                        width,
+                        height,
+                        &mask.bytes,
+                        mask.width,
+                        mask.height,
+                        mask.stride,
+                    ),
+                }
             }
             writer.write_frame(&buffer)?;
         }
@@ -475,6 +486,48 @@ fn video_loop(
         }
     }
     writer.finish()
+}
+
+fn apply_nv12_mask(
+    pixels: &mut [u8],
+    width: u32,
+    height: u32,
+    mask: &[u8],
+    mask_width: u32,
+    mask_height: u32,
+    mask_stride: usize,
+) {
+    let (w, h) = (width as usize, height as usize);
+    if w == 0 || h == 0 || w % 2 != 0 || h % 2 != 0 || pixels.len() < w * h * 3 / 2 {
+        return;
+    }
+    let selected = |x: usize, y: usize| {
+        x < mask_width as usize
+            && y < mask_height as usize
+            && y.checked_mul(mask_stride)
+                .and_then(|base| base.checked_add(x))
+                .and_then(|index| mask.get(index))
+                .is_some_and(|&value| value >= 128)
+    };
+    let (luma, chroma) = pixels.split_at_mut(w * h);
+    for y in (0..h).step_by(2) {
+        for x in (0..w).step_by(2) {
+            let mut kept = 0u16;
+            for dy in 0..2 {
+                for dx in 0..2 {
+                    if selected(x + dx, y + dy) {
+                        kept += 1;
+                    } else {
+                        luma[(y + dy) * w + x + dx] = 16;
+                    }
+                }
+            }
+            let uv = y / 2 * w + x;
+            for channel in &mut chroma[uv..uv + 2] {
+                *channel = (128 + (i16::from(*channel) - 128) * kept as i16 / 4) as u8;
+            }
+        }
+    }
 }
 
 fn audio_loop(
@@ -582,7 +635,10 @@ pub fn apply_mask(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::sync::{Condvar, Mutex, atomic::AtomicUsize};
+    use std::{
+        process::Command,
+        sync::{Condvar, Mutex, atomic::AtomicUsize},
+    };
 
     #[test]
     #[ignore]
@@ -706,6 +762,32 @@ mod tests {
         assert_eq!(buffer, vec![255; 8]);
     }
 
+    #[test]
+    fn nv12_mask_blacks_unselected_blocks_and_preserves_selected_blocks() {
+        let mut pixels = vec![80; 4 * 2];
+        pixels.extend_from_slice(&[90, 240, 90, 240]);
+        apply_nv12_mask(
+            &mut pixels,
+            4,
+            2,
+            &[0, 0, 255, 255, 0, 0, 255, 255],
+            4,
+            2,
+            4,
+        );
+        assert_eq!(&pixels[..8], &[16, 16, 80, 80, 16, 16, 80, 80]);
+        assert_eq!(&pixels[8..], &[128, 128, 90, 240]);
+    }
+
+    #[test]
+    fn nv12_mask_blends_chroma_at_shape_edge() {
+        let mut pixels = vec![80; 4];
+        pixels.extend_from_slice(&[88, 240]);
+        apply_nv12_mask(&mut pixels, 2, 2, &[255, 0, 0, 0], 2, 2, 2);
+        assert_eq!(&pixels[..4], &[80, 16, 16, 16]);
+        assert_eq!(&pixels[4..], &[118, 156]);
+    }
+
     struct StubWriter {
         entered: Arc<AtomicBool>,
         disposed: Arc<AtomicBool>,
@@ -769,7 +851,7 @@ mod tests {
             AudioSources::default(),
             None,
             0,
-            Box::new(move |path, _, _, _, _| {
+            Box::new(move |path, _, _, _, _, _| {
                 File::create(path)?;
                 Ok(Box::new(StubWriter {
                     gate,
@@ -940,6 +1022,60 @@ mod tests {
     }
 
     #[test]
+    #[ignore]
+    fn finished_nv12_recording_has_bt709_tags_and_decodes() -> Result<()> {
+        let capture = ScreenCaptureService::new();
+        let stream = capture.start_recording_stream(0, 0, 1280, 720)?;
+        assert_eq!(stream.pixel_format(), RecordingPixelFormat::Nv12);
+        drop(stream);
+        let output = temp_path("nv12-verification.mp4");
+        let mut recorder = VideoRecorder::new(
+            &capture,
+            0,
+            0,
+            1280,
+            720,
+            30,
+            4_000_000,
+            &output,
+            AudioSources::default(),
+            None,
+            0,
+        )?;
+        thread::sleep(Duration::from_secs(2));
+        assert!(recorder.finish(false, false)?);
+        let probe = Command::new("ffprobe")
+            .args([
+                "-v",
+                "error",
+                "-select_streams",
+                "v:0",
+                "-show_entries",
+                "stream=pix_fmt,color_space,color_primaries,color_transfer,color_range",
+                "-of",
+                "default=noprint_wrappers=1",
+            ])
+            .arg(&output)
+            .output()?;
+        assert!(probe.status.success());
+        let tags = String::from_utf8(probe.stdout)?;
+        assert!(tags.contains("pix_fmt=yuv420p"));
+        assert!(tags.contains("color_space=bt709"));
+        assert!(tags.contains("color_primaries=bt709"));
+        assert!(tags.contains("color_transfer=bt709"));
+        assert!(tags.contains("color_range=tv"));
+        let decode = Command::new("ffmpeg")
+            .args(["-hide_banner", "-loglevel", "error", "-i"])
+            .arg(&output)
+            .args(["-frames:v", "1", "-f", "null", "-"])
+            .status()?;
+        assert!(decode.success());
+        println!("Finished NV12 recording decodes with {tags}");
+        remove_file(&output);
+        Ok(())
+    }
+
+    #[test]
     fn timer_period_restores_once_on_error_and_repeated_stop() {
         static BEGINS: AtomicUsize = AtomicUsize::new(0);
         static ENDS: AtomicUsize = AtomicUsize::new(0);
@@ -966,7 +1102,7 @@ mod tests {
             AudioSources::default(),
             None,
             0,
-            Box::new(|_, _, _, _, _| -> Result<Box<dyn FrameWriter>> {
+            Box::new(|_, _, _, _, _, _| -> Result<Box<dyn FrameWriter>> {
                 bail!("writer should not start")
             }),
             TimerPeriod::raise_with(begin, end),
@@ -988,7 +1124,7 @@ mod tests {
             AudioSources::default(),
             None,
             0,
-            Box::new(move |path, _, _, _, _| {
+            Box::new(move |path, _, _, _, _, _| {
                 File::create(path)?;
                 Ok(Box::new(StubWriter {
                     gate: None,

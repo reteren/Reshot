@@ -2,11 +2,50 @@
 
 mod dd;
 mod native;
+mod nv12;
 mod wgc;
 
 use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 
-pub use wgc::{MonitorFrame, MonitorStream, request_borderless_access};
+pub use wgc::{MonitorFrame, MonitorStream, Nv12MonitorStream, request_borderless_access};
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum RecordingPixelFormat {
+    Bgra,
+    Nv12,
+}
+
+enum RecordingStreamInner {
+    Bgra(MonitorStream),
+    Nv12(Nv12MonitorStream),
+}
+
+pub struct RecordingMonitorStream {
+    pub monitor: CapturedMonitor,
+    pub left: u32,
+    pub top: u32,
+    pub width: u32,
+    pub height: u32,
+    inner: RecordingStreamInner,
+}
+
+impl RecordingMonitorStream {
+    pub fn pixel_format(&self) -> RecordingPixelFormat {
+        match self.inner {
+            RecordingStreamInner::Bgra(_) => RecordingPixelFormat::Bgra,
+            RecordingStreamInner::Nv12(_) => RecordingPixelFormat::Nv12,
+        }
+    }
+
+    pub fn copy_frame(&self, destination: &mut [u8]) -> anyhow::Result<bool> {
+        match &self.inner {
+            RecordingStreamInner::Bgra(stream) => {
+                stream.copy_region(self.left, self.top, self.width, self.height, destination)
+            }
+            RecordingStreamInner::Nv12(stream) => stream.copy_frame(destination),
+        }
+    }
+}
 
 /// A monitor rectangle in virtual-desktop (physical-pixel) coordinates.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -106,7 +145,9 @@ impl ScreenCaptureService {
                             "Desktop Duplication failed ({reason}) {misses} times in a row; using WGC, retrying it every {RETRY_EVERY} captures"
                         );
                     } else if misses < MISSES_BEFORE_SKIPPING {
-                        log::warn!("Desktop Duplication failed ({reason}); using WGC for this capture");
+                        log::warn!(
+                            "Desktop Duplication failed ({reason}); using WGC for this capture"
+                        );
                     }
                 }
             }
@@ -143,6 +184,52 @@ impl ScreenCaptureService {
             .ok_or_else(|| anyhow::anyhow!("no monitor found for recording"))?;
         wgc::start_stream(target.clone())
     }
+
+    /// Prefer GPU-cropped NV12 for video, falling back to the original BGRA stream.
+    pub fn start_recording_stream(
+        &self,
+        screen_x: i32,
+        screen_y: i32,
+        requested_width: u32,
+        requested_height: u32,
+    ) -> anyhow::Result<RecordingMonitorStream> {
+        let monitors = native::enumerate_monitors()?;
+        let target = monitors
+            .iter()
+            .find(|m| m.info.contains(screen_x, screen_y))
+            .or_else(|| monitors.iter().find(|m| m.info.is_primary))
+            .or_else(|| monitors.first())
+            .ok_or_else(|| anyhow::anyhow!("no monitor found for recording"))?;
+        let monitor = &target.info;
+        if monitor.width < 2 || monitor.height < 2 {
+            anyhow::bail!("monitor smaller than 2x2");
+        }
+        let left = (screen_x - monitor.left).clamp(0, monitor.width as i32 - 2) as u32;
+        let top = (screen_y - monitor.top).clamp(0, monitor.height as i32 - 2) as u32;
+        let width = (requested_width.min(monitor.width - left) & !1).max(2);
+        let height = (requested_height.min(monitor.height - top) & !1).max(2);
+        let crop = nv12::Crop {
+            left,
+            top,
+            width,
+            height,
+        };
+        let inner = match wgc::start_nv12_stream(target.clone(), crop) {
+            Ok(stream) => RecordingStreamInner::Nv12(stream),
+            Err(error) => {
+                log::warn!("GPU NV12 capture unavailable; using BGRA recording path: {error:#}");
+                RecordingStreamInner::Bgra(wgc::start_stream(target.clone())?)
+            }
+        };
+        Ok(RecordingMonitorStream {
+            monitor: monitor.clone(),
+            left,
+            top,
+            width,
+            height,
+            inner,
+        })
+    }
 }
 
 #[cfg(test)]
@@ -153,8 +240,12 @@ mod tests {
     fn duplication_is_skipped_after_repeated_misses_but_still_retried() {
         let service = ScreenCaptureService::new();
         assert!(service.try_duplication());
-        service.duplication_misses.store(MISSES_BEFORE_SKIPPING, Ordering::Relaxed);
-        let tried: Vec<bool> = (0..2 * RETRY_EVERY).map(|_| service.try_duplication()).collect();
+        service
+            .duplication_misses
+            .store(MISSES_BEFORE_SKIPPING, Ordering::Relaxed);
+        let tried: Vec<bool> = (0..2 * RETRY_EVERY)
+            .map(|_| service.try_duplication())
+            .collect();
         assert_eq!(tried.iter().filter(|&&t| t).count(), 2);
         assert!(tried[RETRY_EVERY as usize - 1]);
         // A success resets the count: every capture tries it again.

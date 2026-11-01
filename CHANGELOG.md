@@ -17,6 +17,12 @@ project adheres to [Semantic Versioning](https://semver.org/).
 - Recording uses Media Foundation only through a GPU encoder. Without one it used to get
   Microsoft's software encoder: on 1080p60 its ffmpeg took 693 MB; libx264, used now in its
   place, takes 232 MB for about 0.2 of a core more.
+- Recording converts frames to YUV (NV12) on the graphics card and pipes 1.5 bytes a pixel
+  to ffmpeg instead of 4, so ffmpeg no longer converts colours. On the same 1080p60 content
+  ffmpeg needs 20-30% less CPU and Reshot about half; if the card cannot convert, recording
+  falls back to the previous path.
+- Recordings are BT.709 and say so in the file. They used to carry BT.601 colours untagged,
+  which players read as BT.709, so colours were slightly off.
 - Settings: the elevated autostart checkbox reads "As administrator".
 
 ## [1.3.3] - Unreleased (test build)

@@ -6,6 +6,7 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use anyhow::{Context, Result, bail};
+use reshot_capture::RecordingPixelFormat;
 
 use crate::{Ffmpeg, FfmpegArgs, ffmpeg::Process};
 
@@ -18,7 +19,7 @@ pub struct AudioConfig {
     pub bitrate: u32,
 }
 
-/// Streams tightly packed BGRA frames to ffmpeg. Odd dimensions are cropped to even dimensions.
+/// Streams tightly packed BGRA or NV12 frames to ffmpeg. Odd dimensions are cropped to even dimensions.
 pub struct Mp4VideoEncoder {
     output: PathBuf,
     video_path: PathBuf,
@@ -41,6 +42,27 @@ impl Mp4VideoEncoder {
         bitrate: u32,
         audio: Option<AudioConfig>,
     ) -> Result<Self> {
+        Self::new_with_format(
+            path,
+            width,
+            height,
+            fps,
+            bitrate,
+            audio,
+            RecordingPixelFormat::Bgra,
+        )
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub fn new_with_format(
+        path: impl AsRef<Path>,
+        width: u32,
+        height: u32,
+        fps: u32,
+        bitrate: u32,
+        audio: Option<AudioConfig>,
+        format: RecordingPixelFormat,
+    ) -> Result<Self> {
         let width = width & !1;
         let height = height & !1;
         if width < 2 || height < 2 || fps == 0 {
@@ -48,7 +70,10 @@ impl Mp4VideoEncoder {
         }
         let frame_bytes = (width as usize)
             .checked_mul(height as usize)
-            .and_then(|n| n.checked_mul(4))
+            .and_then(|n| match format {
+                RecordingPixelFormat::Bgra => n.checked_mul(4),
+                RecordingPixelFormat::Nv12 => n.checked_mul(3).map(|bytes| bytes / 2),
+            })
             .context("video dimensions too large")?;
         let output = path.as_ref().to_path_buf();
         let video_path = if audio.is_some() {
@@ -62,7 +87,7 @@ impl Mp4VideoEncoder {
             None => None,
         };
         let encoder = Ffmpeg::select_h264_encoder(width, height)?;
-        let args = FfmpegArgs::video(
+        let args = FfmpegArgs::video_with_format(
             width,
             height,
             fps,
@@ -70,6 +95,7 @@ impl Mp4VideoEncoder {
             &encoder,
             &video_path.to_string_lossy(),
             FfmpegArgs::default_tuning(&encoder),
+            format,
         );
         let process = Ffmpeg::start(&args, true)?;
         Ok(Self {
@@ -90,22 +116,22 @@ impl Mp4VideoEncoder {
         self.process.as_ref().map(Process::abort_handle)
     }
 
-    pub fn write_frame(&mut self, bgra: &[u8]) -> Result<()> {
+    pub fn write_frame(&mut self, pixels: &[u8]) -> Result<()> {
         if self.finished {
             bail!("video encoder already finished");
         }
-        if bgra.len() != self.frame_bytes {
+        if pixels.len() != self.frame_bytes {
             bail!(
-                "expected {} BGRA bytes, got {}",
+                "expected {} video bytes, got {}",
                 self.frame_bytes,
-                bgra.len()
+                pixels.len()
             );
         }
         self.process
             .as_mut()
             .and_then(|p| p.stdin.as_mut())
             .context("video input pipe closed")?
-            .write_all(bgra)?;
+            .write_all(pixels)?;
         self.frames += 1;
         Ok(())
     }
