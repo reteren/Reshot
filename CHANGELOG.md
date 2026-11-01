@@ -12,7 +12,9 @@ project adheres to [Semantic Versioning](https://semver.org/).
   every tenth capture. The overlay opens without one more copy of the frame, an export
   composites only the selected region instead of the whole desktop, overlay tiles convert
   through a lookup table, OCR fills the engine's buffer directly, and recording reuses its
-  audio mix buffer and masks whole rows at a time.
+  audio mix buffer and masks whole rows at a time. A recording at a new size probes the
+  encoder that worked last time first, so where only Media Foundation works it starts after one
+  probe instead of four (about 300 ms sooner).
 - Settings: the elevated autostart checkbox reads "As administrator".
 
 ## [1.3.3] - Unreleased (test build)

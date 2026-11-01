@@ -169,7 +169,15 @@ impl Ffmpeg {
         }
         let mut chosen = "libx264".to_string();
         if Self::is_available() {
-            for encoder in ["h264_nvenc", "h264_amf", "h264_qsv", "h264_mf"] {
+            // Every failed probe is a whole ffmpeg launch (70-120 ms), and a new recording
+            // size probes again. The encoder that last passed goes first: on a machine where
+            // only the fourth works, that is one launch instead of four. Only passes at a
+            // normal size count, since a tiny crop can fail a GPU encoder that larger sizes
+            // would get.
+            static LAST_GOOD: Mutex<Option<&'static str>> = Mutex::new(None);
+            let last = *LAST_GOOD.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+            let order = probe_order(last);
+            for encoder in order {
                 let args = FfmpegArgs::h264_probe(
                     width,
                     height,
@@ -181,6 +189,10 @@ impl Ffmpeg {
                 {
                     Ok((true, _)) => {
                         chosen = encoder.to_string();
+                        if width >= 256 && height >= 256 {
+                            *LAST_GOOD.lock().unwrap_or_else(std::sync::PoisonError::into_inner) =
+                                Some(encoder);
+                        }
                         break;
                     }
                     Ok((false, reason)) => {
@@ -195,6 +207,18 @@ impl Ffmpeg {
         guard.insert((width, height), chosen.clone());
         Ok(chosen)
     }
+}
+
+const HARDWARE_ENCODERS: [&str; 4] = ["h264_nvenc", "h264_amf", "h264_qsv", "h264_mf"];
+
+/// The hardware encoders in probe order: their usual preference, with `first` moved ahead.
+fn probe_order(first: Option<&str>) -> Vec<&'static str> {
+    let mut order = HARDWARE_ENCODERS.to_vec();
+    if let Some(i) = order.iter().position(|&e| Some(e) == first) {
+        let e = order.remove(i);
+        order.insert(0, e);
+    }
+    order
 }
 
 fn resolve_path() -> Option<PathBuf> {
@@ -225,4 +249,17 @@ fn resolve_path() -> Option<PathBuf> {
     candidates
         .into_iter()
         .find(|candidate| fs::metadata(candidate).is_ok_and(|m| m.is_file()))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn the_last_good_encoder_is_probed_first_and_the_rest_keep_their_order() {
+        assert_eq!(probe_order(None), HARDWARE_ENCODERS);
+        assert_eq!(probe_order(Some("h264_mf")), ["h264_mf", "h264_nvenc", "h264_amf", "h264_qsv"]);
+        assert_eq!(probe_order(Some("h264_amf")), ["h264_amf", "h264_nvenc", "h264_qsv", "h264_mf"]);
+        assert_eq!(probe_order(Some("libx264")), HARDWARE_ENCODERS);
+    }
 }
