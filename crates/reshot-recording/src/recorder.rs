@@ -539,6 +539,30 @@ pub fn apply_mask(
     if crop_width == 0 || crop_height == 0 || bgra.len() < pixels.saturating_mul(4) {
         return;
     }
+    let row_width = crop_width as usize;
+    // Recording masks normally cover the crop; validate their bounds once before scanning rows.
+    if mask_width >= crop_width
+        && mask_height >= crop_height
+        && mask_stride >= row_width
+        && (crop_height as usize - 1)
+            .checked_mul(mask_stride)
+            .and_then(|base| base.checked_add(row_width))
+            .is_some_and(|end| end <= mask.len())
+    {
+        for (y, row) in bgra
+            .chunks_exact_mut(row_width * 4)
+            .take(crop_height as usize)
+            .enumerate()
+        {
+            let mask_row = &mask[y * mask_stride..y * mask_stride + row_width];
+            for (pixel, &selected) in row.chunks_exact_mut(4).zip(mask_row) {
+                if selected < 128 {
+                    pixel.copy_from_slice(&[0, 0, 0, 255]);
+                }
+            }
+        }
+        return;
+    }
     for y in 0..crop_height as usize {
         for x in 0..crop_width as usize {
             let selected = x < mask_width as usize
@@ -559,6 +583,66 @@ pub fn apply_mask(
 mod tests {
     use super::*;
     use std::sync::{Condvar, Mutex, atomic::AtomicUsize};
+
+    #[test]
+    #[ignore]
+    fn bench_shape_mask() {
+        use std::hint::black_box;
+        #[inline(never)]
+        fn baseline(bgra: &mut [u8], mask: &[u8], width: u32, height: u32, stride: usize) {
+            for y in 0..height as usize {
+                for x in 0..width as usize {
+                    let selected = x < width as usize
+                        && y < height as usize
+                        && y.checked_mul(stride)
+                            .and_then(|base| base.checked_add(x))
+                            .and_then(|index| mask.get(index))
+                            .is_some_and(|&value| value >= 128);
+                    if !selected {
+                        bgra[(y * width as usize + x) * 4..(y * width as usize + x) * 4 + 4]
+                            .copy_from_slice(&[0, 0, 0, 255]);
+                    }
+                }
+            }
+        }
+        let (width, height) = (1920u32, 1080u32);
+        let mut frame = vec![127u8; width as usize * height as usize * 4];
+        let mask = (0..width as usize * height as usize)
+            .map(|i| if i % 3 == 0 { 0 } else { 255 })
+            .collect::<Vec<_>>();
+        let start = Instant::now();
+        for _ in 0..100 {
+            baseline(
+                &mut frame,
+                &mask,
+                black_box(width),
+                black_box(height),
+                black_box(width as usize),
+            );
+            black_box(&frame);
+        }
+        println!(
+            "mask baseline 1080p: {:.2} ms/frame",
+            start.elapsed().as_secs_f64() * 10.0
+        );
+        let start = Instant::now();
+        for _ in 0..100 {
+            apply_mask(
+                &mut frame,
+                black_box(width),
+                black_box(height),
+                Some(&mask),
+                black_box(width),
+                black_box(height),
+                black_box(width as usize),
+            );
+            black_box(&frame);
+        }
+        println!(
+            "mask 1080p: {:.2} ms/frame",
+            start.elapsed().as_secs_f64() * 10.0
+        );
+    }
 
     fn pixel(buffer: &[u8], index: usize) -> &[u8] {
         &buffer[index * 4..index * 4 + 4]

@@ -46,6 +46,7 @@ impl Drop for Source {
 /// a source is idle, so an encoder's fixed-rate pull always advances the PCM clock.
 pub struct AudioCaptureMixer {
     sources: Vec<Source>,
+    mix: Mutex<Vec<f32>>,
 }
 
 impl AudioCaptureMixer {
@@ -66,7 +67,10 @@ impl AudioCaptureMixer {
                 Err(error) => log::warn!("audio source unavailable: {error:#}"),
             }
         }
-        Self { sources }
+        Self {
+            sources,
+            mix: Mutex::new(Vec::new()),
+        }
     }
 
     pub fn has_any_source(&self) -> bool {
@@ -87,15 +91,20 @@ impl AudioCaptureMixer {
         if samples == 0 {
             return 0;
         }
-        let mut mix = vec![0.0f32; samples];
+        let mut mix = self
+            .mix
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        mix.resize(samples, 0.0);
+        mix[..samples].fill(0.0);
         for source in &self.sources {
             if let Ok(mut queue) = source.samples.lock() {
-                for sample in &mut mix {
+                for sample in &mut mix[..samples] {
                     *sample += queue.pop_front().unwrap_or(0.0);
                 }
             }
         }
-        for (sample, out) in mix.into_iter().zip(dest.chunks_exact_mut(2)) {
+        for (sample, out) in mix[..samples].iter().copied().zip(dest.chunks_exact_mut(2)) {
             out.copy_from_slice(
                 &((sample.clamp(-1.0, 1.0) * i16::MAX as f32) as i16).to_le_bytes(),
             );
@@ -299,6 +308,22 @@ fn audio_loop(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    #[ignore]
+    fn bench_pcm_mix() {
+        use std::hint::black_box;
+        let mixer = AudioCaptureMixer::new(&AudioSources::default());
+        let mut output = [0u8; 480 * CHANNELS * 2];
+        let start = Instant::now();
+        for _ in 0..100_000 {
+            black_box(mixer.read_pcm16(&mut output, 480));
+        }
+        println!(
+            "PCM mix: {:.2} us/chunk",
+            start.elapsed().as_secs_f64() * 10.0
+        );
+    }
 
     #[test]
     fn pcm_read_clamps_to_undersized_destination() {

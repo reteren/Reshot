@@ -107,23 +107,26 @@ pub fn try_recognize(
         bail!("OCR image exceeds Windows maximum dimension {max}");
     }
     let scale = upscale_factor(width, height, max);
-    let pixels = if scale > 1 {
-        upscale_bgra(bgra, width, height, stride, scale)
-    } else {
-        compact_bgra(bgra, width, height, stride)
-    };
     let scaled_width = width * scale;
     let scaled_height = height * scale;
-    let buffer = Buffer::Create(pixels.len().try_into().context("OCR buffer too large")?)?;
+    let pixel_bytes = (scaled_width as usize)
+        .checked_mul(scaled_height as usize)
+        .and_then(|n| n.checked_mul(4))
+        .context("OCR buffer too large")?;
+    let buffer = Buffer::Create(pixel_bytes.try_into().context("OCR buffer too large")?)?;
     let access: IBufferByteAccess = buffer.cast()?;
     let ptr = unsafe { access.Buffer()? };
     if ptr.is_null() {
         bail!("Windows OCR buffer pointer is null");
     }
-    unsafe {
-        std::ptr::copy_nonoverlapping(pixels.as_ptr(), ptr, pixels.len());
+    // The bitmap copies from this buffer, so fill it directly instead of copying a second image.
+    let pixels = unsafe { std::slice::from_raw_parts_mut(ptr, pixel_bytes) };
+    if scale > 1 {
+        upscale_bgra_into(bgra, width, height, stride, scale, pixels);
+    } else {
+        compact_bgra_into(bgra, width, height, stride, pixels);
     }
-    buffer.SetLength(pixels.len() as u32)?;
+    buffer.SetLength(pixel_bytes as u32)?;
     let bitmap = SoftwareBitmap::CreateCopyWithAlphaFromBuffer(
         &buffer,
         BitmapPixelFormat::Bgra8,
@@ -252,13 +255,18 @@ fn best_overlap<'a>(target: &EngineLine, candidates: &'a [EngineLine]) -> Option
     }
 }
 
-fn compact_bgra(source: &[u8], width: u32, height: u32, stride: usize) -> Vec<u8> {
+fn compact_bgra_into(source: &[u8], width: u32, height: u32, stride: usize, out: &mut [u8]) {
     let row_bytes = width as usize * 4;
-    let mut out = vec![0; row_bytes * height as usize];
     for y in 0..height as usize {
         out[y * row_bytes..(y + 1) * row_bytes]
             .copy_from_slice(&source[y * stride..y * stride + row_bytes]);
     }
+}
+
+#[cfg(test)]
+fn compact_bgra(source: &[u8], width: u32, height: u32, stride: usize) -> Vec<u8> {
+    let mut out = vec![0; width as usize * height as usize * 4];
+    compact_bgra_into(source, width, height, stride, &mut out);
     out
 }
 
@@ -287,7 +295,14 @@ const MAX_UPSCALED_PIXELS: u64 = 30_000_000;
 /// legible without the hard steps of nearest-neighbour. Separable (rows, then columns) with
 /// the weights computed once per phase, and split into bands of rows across the cores: the
 /// direct 16-tap version took over a second for a large selection, before the engines ran.
-fn upscale_bgra(source: &[u8], width: u32, height: u32, stride: usize, scale: u32) -> Vec<u8> {
+fn upscale_bgra_into(
+    source: &[u8],
+    width: u32,
+    height: u32,
+    stride: usize,
+    scale: u32,
+    out: &mut [u8],
+) {
     let (w, h, s) = (width as usize, height as usize, scale as usize);
     let (out_w, out_h) = (w * s, h * s);
     // Output pixel `o` maps to source `(o + 0.5) / s - 0.5`: four taps from `o / s - 1`
@@ -324,7 +339,6 @@ fn upscale_bgra(source: &[u8], width: u32, height: u32, stride: usize, scale: u3
         }
     };
 
-    let mut out = vec![0u8; out_w * out_h * 4];
     let threads = std::thread::available_parallelism()
         .map_or(4, |n| n.get())
         .min(16);
@@ -365,6 +379,12 @@ fn upscale_bgra(source: &[u8], width: u32, height: u32, stride: usize, scale: u3
             });
         }
     });
+}
+
+#[cfg(test)]
+fn upscale_bgra(source: &[u8], width: u32, height: u32, stride: usize, scale: u32) -> Vec<u8> {
+    let mut out = vec![0; width as usize * height as usize * scale as usize * scale as usize * 4];
+    upscale_bgra_into(source, width, height, stride, scale, &mut out);
     out
 }
 
@@ -382,6 +402,43 @@ fn cubic(x: f32) -> f32 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    #[ignore]
+    fn bench_ocr_buffer_preparation() {
+        use std::hint::black_box;
+        use std::time::Instant;
+        let (width, height, scale) = (1200u32, 800u32, 3u32);
+        let source = vec![127u8; width as usize * height as usize * 4];
+        let len = source.len() * scale as usize * scale as usize;
+        let mut direct = vec![0; len];
+        let start = Instant::now();
+        for _ in 0..20 {
+            let intermediate = upscale_bgra(&source, width, height, width as usize * 4, scale);
+            direct.copy_from_slice(&intermediate);
+            black_box(&direct);
+        }
+        println!(
+            "OCR prepare via intermediate: {:.2} ms",
+            start.elapsed().as_secs_f64() * 50.0
+        );
+        let start = Instant::now();
+        for _ in 0..20 {
+            upscale_bgra_into(
+                &source,
+                width,
+                height,
+                width as usize * 4,
+                scale,
+                &mut direct,
+            );
+            black_box(&direct);
+        }
+        println!(
+            "OCR prepare direct: {:.2} ms",
+            start.elapsed().as_secs_f64() * 50.0
+        );
+    }
 
     fn line(text: &str, top: f32, bottom: f32, latin: usize, cyrillic: usize) -> EngineLine {
         EngineLine {
