@@ -14,6 +14,8 @@ project adheres to [Semantic Versioning](https://semver.org/).
 - Soft strokes no longer show diagonal seams where they cross themselves or turn sharply:
   the stroke follows a smooth curve through the mouse points, and where it crosses itself
   its soft edges add up like paint instead of keeping the larger of the two, as hive does.
+- A click with the Text tool puts the middle of the line on the cursor; the text used to
+  start just below it.
 
 ## [1.2.9] - Unreleased (test build)
 

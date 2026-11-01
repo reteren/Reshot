@@ -380,7 +380,7 @@ impl Editor {
     pub fn begin_text(&mut self, p: Point, clip: Option<Path>) {
         self.commit_text();
         let s = self.settings(DrawTool::Text);
-        self.text = Some(VectorObject {
+        let mut t = VectorObject {
             kind: VectorKind::Text,
             p1: p,
             color: s.color,
@@ -388,7 +388,11 @@ impl Editor {
             font_size: (s.thickness * 5.0).max(16.0),
             font_family: s.font_family.clone(),
             ..Default::default()
-        });
+        };
+        // p1 is the line's top-left; the click is where the first line's middle goes, so the
+        // text sits on the cursor rather than below it.
+        t.p1.y -= t.line_height() / 2.0;
+        self.text = Some(t);
         self.text_clip = clip;
     }
 
@@ -868,7 +872,8 @@ fn draw_caret(canvas: &skia_safe::Canvas, t: &VectorObject) {
     p.set_color(t.color);
     p.set_stroke_width((t.font_size / 16.0).max(1.5));
     p.set_anti_alias(true);
-    canvas.draw_line((x + 1.0, y), (x + 1.0, y + t.font_size), &p);
+    // Ascent to descent, the line's full height, so the caret's middle is the line's.
+    canvas.draw_line((x + 1.0, y), (x + 1.0, y + t.line_height()), &p);
 }
 
 /// A repeating grey checkerboard: the "transparent" indicator.
@@ -961,9 +966,19 @@ mod tests {
     }
 
     #[test]
+    fn text_is_centred_on_the_click() {
+        let mut e = editor();
+        e.begin_text(Point::new(50.0, 60.0), None);
+        e.type_str("Hi");
+        let b = e.text_editing().unwrap().compute_bounds();
+        assert_eq!(b.left, 50.0);
+        assert!((b.center_y() - 60.0).abs() < 0.5, "line middle at {}", b.center_y());
+    }
+
+    #[test]
     fn typed_text_bakes_on_commit() {
         let mut e = editor();
-        e.begin_text(Point::new(5.0, 5.0), None);
+        e.begin_text(Point::new(5.0, 40.0), None);
         e.type_str("Hi\u{8}");
         e.type_newline();
         e.type_str("x");

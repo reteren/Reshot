@@ -174,6 +174,12 @@ impl VectorObject {
         Font::from_typeface(fonts::resolve(&self.font_family), self.font_size)
     }
 
+    /// Height of one line of text: ascent to descent.
+    pub fn line_height(&self) -> f32 {
+        let (_, m) = self.font().metrics();
+        m.descent - m.ascent
+    }
+
     fn draw_text(&self, canvas: &Canvas) {
         if self.text.is_empty() {
             return;
