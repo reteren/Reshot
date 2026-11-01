@@ -198,8 +198,9 @@ original.
   screen is **not** frozen while recording; the live image is captured.
 - The whole editing UI disappears during recording.
 - A small indicator window sits in a corner: a red light, a timer, and the resolution.
-- The bounds of the recorded area are shown with **corner brackets**. The settings can turn
-  them off or change their colour and opacity.
+- The bounds of the recorded area are shown with **corner brackets** and a thin outline with
+  a soft shadow (the system frame of the brackets' window). The settings can turn the
+  brackets off or change their colour and opacity; the outline and shadow always stay.
 - **Recording stops on the main hotkey.**
 
 Technical parameters:

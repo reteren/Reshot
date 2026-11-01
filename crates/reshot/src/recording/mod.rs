@@ -256,12 +256,14 @@ fn complete_start(cx: &mut App, serial: u64) -> bool {
                 finish_video(cx, Box::new(recorder), system, mic);
             }
             Ok(Ok(recorder)) => {
-                let region = corners.enabled.then_some(rect);
+                // The brackets' window always opens: Windows draws its thin outline and soft
+                // shadow around the recorded area. The brackets setting only hides the brackets.
+                let opacity = if corners.enabled { corners.opacity } else { 0.0 };
                 let hud = HudWindows::open(
                     format!("{}×{}", recorder.width, recorder.height),
-                    region,
+                    Some(rect),
                     &corners.color,
-                    corners.opacity,
+                    opacity,
                     cx,
                 );
                 log::info!("Recording started: {}", recorder.path.display());
@@ -511,6 +513,14 @@ fn finish_audio(cx: &App, mut recorder: AudioRecorder) {
 #[cfg(debug_assertions)]
 pub fn preview_track_prompt(cx: &mut App) {
     let _ = TrackPrompt::open(u64::MAX, true, true, true, true, cx);
+}
+
+/// Debug builds: the REC indicator and the outline around a fixed area, brackets off,, with no recording
+/// behind them (`--preview-recording-hud`). They stay until the process exits.
+#[cfg(debug_assertions)]
+pub fn preview_recording_hud(cx: &mut App) {
+    let region = reshot_platform::win::PxRect { left: 400, top: 300, right: 1200, bottom: 800 };
+    let _ = hud::HudWindows::open("800x500".into(), Some(region), "#3C9898", 0.0, cx);
 }
 
 fn decide(id: u64, decision: Decision, cx: &mut App) {

@@ -152,6 +152,12 @@ pub fn init(
             })
             .detach();
         }
+        if has("--preview-recording-hud") {
+            cx.spawn(async move |cx: &mut AsyncApp| {
+                let _ = cx.update(crate::recording::preview_recording_hud);
+            })
+            .detach();
+        }
         if has("--preview-radial") {
             cx.spawn(async move |cx: &mut AsyncApp| {
                 let _ = cx.update(|cx| crate::radial::open(cx, 0));

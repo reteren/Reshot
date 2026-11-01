@@ -79,7 +79,10 @@ pub(super) fn prepare_visual_window(cx: &App, hwnd: HWND, rect: PxRect) {
         // No `win::no_frame` here: the system frame's thin outline and shadow around the
         // recorded area are wanted.
         win::place_topmost(hwnd, rect);
-        win::exclude_from_capture(hwnd, true);
+        // Debug builds: RESHOT_PREVIEW_CAPTURABLE leaves them in screenshots, to look at.
+        if !(cfg!(debug_assertions) && std::env::var_os("RESHOT_PREVIEW_CAPTURABLE").is_some()) {
+            win::exclude_from_capture(hwnd, true);
+        }
     });
 }
 
