@@ -152,6 +152,43 @@ pub fn init(
             })
             .detach();
         }
+        // `--bench-video` records a 1920x1080 area of the primary monitor and
+        // `--bench-audio` records audio from the settings' sources, with no UI, to measure
+        // what a recording costs. Stopped by killing the process.
+        if has("--bench-video") {
+            cx.spawn(async move |cx: &mut AsyncApp| {
+                let _ = cx.update(|cx| {
+                    let p = win::primary_monitor_bounds();
+                    let rect = win::PxRect { left: p.left, top: p.top, right: p.left + 1920, bottom: p.top + 1080 };
+                    crate::recording::start_video(cx, rect, None);
+                });
+            })
+            .detach();
+        }
+        // `--bench-cycles` opens and closes the overlay eight times, 3 s each, to see
+        // whether memory comes back after a session.
+        if has("--bench-cycles") {
+            cx.spawn(async move |cx: &mut AsyncApp| {
+                for _ in 0..8 {
+                    let _ = cx.update(|cx| capture(cx, "bench"));
+                    cx.background_executor().timer(Duration::from_secs(3)).await;
+                    let _ = cx.update(|cx| {
+                        if let Some(h) = cx.global::<ReshotApp>().overlay {
+                            let _ = h.update(cx, |o, window, cx| o.bench_close(window, cx));
+                        }
+                    });
+                    cx.background_executor().timer(Duration::from_secs(3)).await;
+                }
+                log::info!("Bench: cycles done.");
+            })
+            .detach();
+        }
+        if has("--bench-audio") {
+            cx.spawn(async move |cx: &mut AsyncApp| {
+                let _ = cx.update(crate::recording::toggle_audio_from_settings);
+            })
+            .detach();
+        }
         if has("--preview-recording-hud") {
             cx.spawn(async move |cx: &mut AsyncApp| {
                 let _ = cx.update(crate::recording::preview_recording_hud);

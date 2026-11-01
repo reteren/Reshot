@@ -40,10 +40,14 @@ impl FfmpegArgs {
                 tune: None,
                 extra_args: Some("-quality speed"),
             },
+            // Hardware only. Without a working GPU encoder Media Foundation falls back to
+            // Microsoft's software MFT, which measured the same CPU as libx264 veryfast on
+            // 1080p60 but three times the memory (751 MB against 239 MB); the probe then fails
+            // and libx264 is used instead.
             "h264_mf" => H264Tuning {
                 preset: None,
                 tune: None,
-                extra_args: Some("-scenario live_streaming"),
+                extra_args: Some("-scenario live_streaming -hw_encoding 1"),
             },
             _ => H264Tuning {
                 preset: None,
@@ -301,7 +305,12 @@ mod tests {
             ("h264_nvenc", Some("p4"), Some("ll"), None),
             ("h264_qsv", Some("veryfast"), None, None),
             ("h264_amf", None, None, Some("-quality speed")),
-            ("h264_mf", None, None, Some("-scenario live_streaming")),
+            (
+                "h264_mf",
+                None,
+                None,
+                Some("-scenario live_streaming -hw_encoding 1"),
+            ),
         ] {
             assert_eq!(
                 FfmpegArgs::default_tuning(name),
@@ -337,14 +346,14 @@ mod tests {
             r"C:\Videos\recording.mp4",
             FfmpegArgs::default_tuning("h264_mf"),
         );
-        assert!(mf.contains("-c:v h264_mf -scenario live_streaming -b:v 17694720"));
+        assert!(mf.contains("-c:v h264_mf -scenario live_streaming -hw_encoding 1 -b:v 17694720"));
     }
 
     #[test]
     fn probes_include_mf_amf_nvenc_tuning() {
         assert!(
             FfmpegArgs::h264_probe(2560, 1440, "h264_mf", FfmpegArgs::default_tuning("h264_mf"))
-                .contains("-c:v h264_mf -scenario live_streaming")
+                .contains("-c:v h264_mf -scenario live_streaming -hw_encoding 1")
         );
         assert!(
             FfmpegArgs::h264_probe(

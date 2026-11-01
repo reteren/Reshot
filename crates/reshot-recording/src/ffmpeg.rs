@@ -155,6 +155,23 @@ impl Ffmpeg {
         Self::start(arguments, false)?.wait()
     }
 
+    /// Whether `encoder` opens and encodes a few frames at this size.
+    fn probe(encoder: &str, width: u32, height: u32) -> bool {
+        let args =
+            FfmpegArgs::h264_probe(width, height, encoder, FfmpegArgs::default_tuning(encoder));
+        match Self::start(&args, false).and_then(|process| process.finish(Duration::from_secs(3))) {
+            Ok((true, _)) => true,
+            Ok((false, reason)) => {
+                log::warn!("ffmpeg {encoder} probe for {width}x{height}: {reason}");
+                false
+            }
+            Err(error) => {
+                log::warn!("ffmpeg {encoder} probe for {width}x{height}: {error:#}");
+                false
+            }
+        }
+    }
+
     /// Probe at the actual even dimensions; ffmpeg's encoder list does not prove GPU or
     /// minimum-size support. Cache per size so a tiny crop cannot poison a larger one.
     pub fn select_h264_encoder(width: u32, height: u32) -> Result<String> {
@@ -169,39 +186,21 @@ impl Ffmpeg {
         }
         let mut chosen = "libx264".to_string();
         if Self::is_available() {
-            // Every failed probe is a whole ffmpeg launch (70-120 ms), and a new recording
-            // size probes again. The encoder that last passed goes first: on a machine where
-            // only the fourth works, that is one launch instead of four. Only passes at a
-            // normal size count, since a tiny crop can fail a GPU encoder that larger sizes
-            // would get.
-            static LAST_GOOD: Mutex<Option<&'static str>> = Mutex::new(None);
-            let last = *LAST_GOOD.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
-            let order = probe_order(last);
-            for encoder in order {
-                let args = FfmpegArgs::h264_probe(
-                    width,
-                    height,
-                    encoder,
-                    FfmpegArgs::default_tuning(encoder),
-                );
-                match Self::start(&args, false)
-                    .and_then(|process| process.finish(Duration::from_secs(3)))
-                {
-                    Ok((true, _)) => {
-                        chosen = encoder.to_string();
-                        if width >= 256 && height >= 256 {
-                            *LAST_GOOD.lock().unwrap_or_else(std::sync::PoisonError::into_inner) =
-                                Some(encoder);
-                        }
-                        break;
-                    }
-                    Ok((false, reason)) => {
-                        log::warn!("ffmpeg {encoder} probe for {width}x{height}: {reason}")
-                    }
-                    Err(error) => {
-                        log::warn!("ffmpeg {encoder} probe for {width}x{height}: {error:#}")
-                    }
-                }
+            // Every probe is a whole ffmpeg launch (70-120 ms) and a new recording size
+            // probes again, so they run side by side: recording starts after the slowest one
+            // rather than after all four in turn. The usual preference still decides.
+            let passed: Vec<bool> = std::thread::scope(|scope| {
+                let probes: Vec<_> = HARDWARE_ENCODERS
+                    .iter()
+                    .map(|&encoder| scope.spawn(move || Self::probe(encoder, width, height)))
+                    .collect();
+                probes
+                    .into_iter()
+                    .map(|p| p.join().unwrap_or(false))
+                    .collect()
+            });
+            if let Some(i) = passed.iter().position(|&ok| ok) {
+                chosen = HARDWARE_ENCODERS[i].to_string();
             }
         }
         guard.insert((width, height), chosen.clone());
@@ -209,17 +208,8 @@ impl Ffmpeg {
     }
 }
 
+/// Hardware encoders, most preferred first.
 const HARDWARE_ENCODERS: [&str; 4] = ["h264_nvenc", "h264_amf", "h264_qsv", "h264_mf"];
-
-/// The hardware encoders in probe order: their usual preference, with `first` moved ahead.
-fn probe_order(first: Option<&str>) -> Vec<&'static str> {
-    let mut order = HARDWARE_ENCODERS.to_vec();
-    if let Some(i) = order.iter().position(|&e| Some(e) == first) {
-        let e = order.remove(i);
-        order.insert(0, e);
-    }
-    order
-}
 
 fn resolve_path() -> Option<PathBuf> {
     let executable = std::env::current_exe().ok()?;
@@ -249,17 +239,4 @@ fn resolve_path() -> Option<PathBuf> {
     candidates
         .into_iter()
         .find(|candidate| fs::metadata(candidate).is_ok_and(|m| m.is_file()))
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn the_last_good_encoder_is_probed_first_and_the_rest_keep_their_order() {
-        assert_eq!(probe_order(None), HARDWARE_ENCODERS);
-        assert_eq!(probe_order(Some("h264_mf")), ["h264_mf", "h264_nvenc", "h264_amf", "h264_qsv"]);
-        assert_eq!(probe_order(Some("h264_amf")), ["h264_amf", "h264_nvenc", "h264_qsv", "h264_mf"]);
-        assert_eq!(probe_order(Some("libx264")), HARDWARE_ENCODERS);
-    }
 }

@@ -326,6 +326,12 @@ impl Overlay {
         cx.defer(app::overlay_closed);
     }
 
+    /// Debug builds: ends the session as Escape would (`--bench-cycles`).
+    #[cfg(debug_assertions)]
+    pub(crate) fn bench_close(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.close(window, cx);
+    }
+
     // ---- Tools ----------------------------------------------------------------------------
 
     fn finish_editing(&mut self, cx: &mut Context<Self>) {
