@@ -3,6 +3,17 @@
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and this
 project adheres to [Semantic Versioning](https://semver.org/).
 
+## [1.3.1] - Unreleased
+
+### Changed
+
+- The tool settings strip's tooltip names its key: "Tool settings (Shift)".
+
+### Fixed
+
+- The Audio Tracks window after a recording is tall enough for its Save button, which was
+  cut off at the bottom.
+
 ## [1.3.0] - Unreleased (test build)
 
 ### Changed

@@ -10,7 +10,10 @@ use reshot_platform::win::{self, PxRect};
 use crate::{theme, winutil};
 
 const WIDTH: f32 = 300.0;
-const HEIGHT: f32 = 202.0;
+/// Fits the content with room to spare: padding 32, title 24, question 37, three rows of the
+/// inherited 16 px text at gpui's 1.618 line height (26 each), separator 18 and the Save row
+/// 36 come to about 226. 202 cut the Save button off.
+const HEIGHT: f32 = 240.0;
 
 #[derive(Clone, Copy)]
 pub(super) struct Decision {
@@ -182,7 +185,8 @@ impl Render for TrackPrompt {
             .child(theme::separator().mt(px(10.)).mb(px(6.)))
             .child(never)
             .child(
-                div().w_full().flex().justify_end().mt(px(12.)).child(
+                // Pinned to the bottom: any spare height goes above it, not below.
+                div().w_full().flex().flex_1().items_end().justify_end().mt(px(12.)).child(
                     theme::button("save-tracks", "Save")
                         .min_w(px(68.))
                         .on_click(cx.listener(|this, _, window, cx| this.decide(window, cx))),

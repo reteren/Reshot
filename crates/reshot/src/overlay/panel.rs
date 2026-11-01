@@ -775,7 +775,7 @@ impl Overlay {
                     (0..3).map(|_| div().mx(px(2.)).size(px(3.)).rounded_full().bg(rgba(0xFFFFFFDD))),
                 ),
             )
-            .tooltip(theme::tooltip("Tool settings"))
+            .tooltip(theme::tooltip("Tool settings (Shift)"))
             .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
             .on_click(cx.listener(|this, _, _, cx| this.toggle_panel(cx)));
 
