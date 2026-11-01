@@ -100,7 +100,7 @@ offer are in [THIRD-PARTY-NOTICES.md](THIRD-PARTY-NOTICES.md).
 - **An application running as administrator cannot be captured over** unless Reshot is
   elevated too. Windows forbids a normal program from taking the foreground away from an
   elevated one, so the overlay cannot come up on top of it. Either run that application
-  without administrator rights, or turn on **Start with Windows → …as administrator** in
+  without administrator rights, or turn on **Start with Windows → As administrator** in
   the settings, which registers a scheduled task so Windows grants the rights once instead
   of prompting at every logon
 
