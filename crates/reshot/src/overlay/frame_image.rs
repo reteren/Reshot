@@ -34,11 +34,13 @@ pub fn from_premultiplied_bgra(width: u32, height: u32, stride: usize, bgra: &[u
     for y in 0..height as usize {
         buf.extend_from_slice(&bgra[y * stride..y * stride + row]);
     }
+    let table = unpremultiply_table();
     for px in buf.chunks_exact_mut(4) {
-        let a = px[3] as u32;
+        let a = px[3];
         if a != 0 && a != 255 {
+            let row = &table[a as usize];
             for c in &mut px[..3] {
-                *c = ((*c as u32 * 255 + a / 2) / a).min(255) as u8;
+                *c = row[*c as usize];
             }
         }
     }
@@ -49,6 +51,22 @@ pub fn from_premultiplied_bgra(width: u32, height: u32, stride: usize, bgra: &[u
 /// Takes the frame's pixels over when its rows are packed, as a capture's always are: the
 /// frame is dropped right after, and copying a 4480x1440 desktop once more costs a 25 MB
 /// allocation and several milliseconds before the overlay can appear.
+/// `[alpha][channel]` → the straight channel, `(c * 255 + a / 2) / a` capped at 255. This runs
+/// for every partly transparent pixel of every re-uploaded tile while drawing, and a soft brush
+/// leaves many; a lookup is cheaper than three divisions per pixel.
+fn unpremultiply_table() -> &'static [[u8; 256]; 256] {
+    static TABLE: std::sync::LazyLock<Box<[[u8; 256]; 256]>> = std::sync::LazyLock::new(|| {
+        let mut t = Box::new([[0u8; 256]; 256]);
+        for (a, row) in t.iter_mut().enumerate().skip(1) {
+            for (c, v) in row.iter_mut().enumerate() {
+                *v = ((c * 255 + a / 2) / a).min(255) as u8;
+            }
+        }
+        t
+    });
+    &TABLE
+}
+
 pub fn render_image(frame: &mut CapturedFrame) -> Arc<RenderImage> {
     let (width, height) = (frame.width, frame.height);
     let len = width as usize * 4 * height as usize;
