@@ -141,13 +141,23 @@ pub fn init(
         .detach();
     }
     // Debug builds: `--preview-track-prompt` opens the audio-track prompt with no recording
-    // behind it, to look at; closing it decides nothing.
+    // behind it, to look at; closing it decides nothing. `--preview-radial` opens the radial
+    // menu at the cursor in its click mode, as if its key had been tapped.
     #[cfg(debug_assertions)]
-    if std::env::args().any(|a| a.eq_ignore_ascii_case("--preview-track-prompt")) {
-        cx.spawn(async move |cx: &mut AsyncApp| {
-            let _ = cx.update(crate::recording::preview_track_prompt);
-        })
-        .detach();
+    {
+        let has = |flag: &str| std::env::args().any(|a| a.eq_ignore_ascii_case(flag));
+        if has("--preview-track-prompt") {
+            cx.spawn(async move |cx: &mut AsyncApp| {
+                let _ = cx.update(crate::recording::preview_track_prompt);
+            })
+            .detach();
+        }
+        if has("--preview-radial") {
+            cx.spawn(async move |cx: &mut AsyncApp| {
+                let _ = cx.update(|cx| crate::radial::open(cx, 0));
+            })
+            .detach();
+        }
     }
     if let Some(tab) = settings_now {
         cx.spawn(async move |cx: &mut AsyncApp| {

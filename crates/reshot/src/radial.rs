@@ -7,7 +7,7 @@ use std::time::{Duration, Instant};
 use gpui::{
     App, AppContext, AsyncApp, Context, FocusHandle, Focusable, Global, InteractiveElement,
     IntoElement, KeyDownEvent, MouseButton, MouseDownEvent, ParentElement, PathBuilder, Render,
-    Styled, Window, WindowHandle, canvas, div, point, px, rgb,
+    Bounds, Styled, TransformationMatrix, Window, WindowHandle, canvas, div, point, px, rgb, size,
 };
 use reshot_platform::win::{self, PxRect};
 use windows::Win32::Foundation::POINT;
@@ -291,7 +291,7 @@ impl Render for RadialMenu {
             .child(
                 canvas(
                     |_, _, _| (),
-                    move |bounds, _, window, _| {
+                    move |bounds, _, window, cx| {
                         let center = (
                             f32::from(bounds.origin.x) + RADIUS,
                             f32::from(bounds.origin.y) + RADIUS,
@@ -314,7 +314,7 @@ impl Render for RadialMenu {
                                 c.0 + mid.cos() * 89.0 * growth,
                                 c.1 + mid.sin() * 89.0 * growth,
                             );
-                            paint_icon(window, i, icon, growth);
+                            paint_icon(window, cx, i, icon, growth);
                         }
                         let hub = circle(center, INNER * growth, 48);
                         paint_polygon(window, &hub, base);
@@ -408,70 +408,20 @@ fn paint_line(window: &mut Window, a: (f32, f32), b: (f32, f32), color: gpui::Rg
         window.paint_path(path, color);
     }
 }
-fn paint_icon(window: &mut Window, i: usize, c: (f32, f32), scale: f32) {
-    let white = rgb(0xFFFFFF);
-    match i {
-        0 => {
-            paint_outline(window, &circle(c, 17.0 * scale, 32), white, 2.5 * scale);
-            paint_polygon(window, &circle(c, 7.5 * scale, 24), white);
-        }
-        1 => {
-            let body = [
-                (-5.0, -14.0),
-                (5.0, -14.0),
-                (7.0, -11.0),
-                (7.0, 3.0),
-                (5.0, 7.0),
-                (-5.0, 7.0),
-                (-7.0, 3.0),
-                (-7.0, -11.0),
-            ];
-            let pts: Vec<_> = body
-                .iter()
-                .map(|(x, y)| (c.0 + x * scale, c.1 + y * scale))
-                .collect();
-            paint_outline(window, &pts, white, 2.0 * scale);
-            paint_line(
-                window,
-                (c.0 - 12.0 * scale, c.1 + 2.0 * scale),
-                (c.0 - 8.0 * scale, c.1 + 12.0 * scale),
-                white,
-                2.0 * scale,
-            );
-            paint_line(
-                window,
-                (c.0 - 8.0 * scale, c.1 + 12.0 * scale),
-                (c.0 + 8.0 * scale, c.1 + 12.0 * scale),
-                white,
-                2.0 * scale,
-            );
-            paint_line(
-                window,
-                (c.0 + 8.0 * scale, c.1 + 12.0 * scale),
-                (c.0 + 12.0 * scale, c.1 + 2.0 * scale),
-                white,
-                2.0 * scale,
-            );
-            paint_line(
-                window,
-                (c.0, c.1 + 12.0 * scale),
-                (c.0, c.1 + 18.0 * scale),
-                white,
-                2.0 * scale,
-            );
-        }
-        _ => {
-            let pts: Vec<_> = (0..24)
-                .map(|n| {
-                    let a = n as f32 * PI / 12.0;
-                    let r = if n % 3 == 0 { 17.0 } else { 12.2 } * scale;
-                    (c.0 + r * a.cos(), c.1 + r * a.sin())
-                })
-                .collect();
-            paint_outline(window, &pts, white, 2.0 * scale);
-            paint_outline(window, &circle(c, 5.0 * scale, 24), white, 2.0 * scale);
-        }
-    }
+/// The slice icons of the C# build (`RadialMenuWindow.cs`, in git history up to 1.2.4): a
+/// screen with a record dot, a microphone, a solid gear. Each is a 40 px wide Viewbox whose
+/// top-left sits 20 px left of and above the slice's mid-radius point, as WPF placed it.
+fn paint_icon(window: &mut Window, cx: &App, i: usize, c: (f32, f32), scale: f32) {
+    let (path, w, h) = match i {
+        0 => ("icons/radial-record.svg", 20.0, 19.0),
+        1 => ("icons/radial-audio.svg", 18.0, 20.0),
+        _ => ("icons/radial-settings.svg", 20.0, 20.0),
+    };
+    let width = 40.0 * scale;
+    let height = width * h / w;
+    let half = 20.0 * scale;
+    let bounds = Bounds::new(point(px(c.0 - half), px(c.1 - half)), size(px(width), px(height)));
+    let _ = window.paint_svg(bounds, path.into(), TransformationMatrix::unit(), rgb(0xFFFFFF).into(), cx);
 }
 
 #[cfg(test)]

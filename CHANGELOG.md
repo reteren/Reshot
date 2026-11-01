@@ -8,7 +8,8 @@ project adheres to [Semantic Versioning](https://semver.org/).
 ### Changed
 
 - The tool settings strip's tooltip names its key: "Tool settings (Shift)".
-- Debug builds take `--preview-track-prompt` to open the Audio Tracks window on its own.
+- Debug builds take `--preview-track-prompt` and `--preview-radial` to open the Audio Tracks
+  window or the radial menu on their own.
 
 ### Fixed
 
@@ -16,6 +17,8 @@ project adheres to [Semantic Versioning](https://semver.org/).
   close glyph, checkboxes and button, and its Save button is no longer cut off.
 - The radial menu and the other pop-ups no longer show a faint square outline and shadow
   around them: Windows drew a normal window frame around the whole (transparent) window.
+- The radial menu's icons are the ones from before the Rust rewrite again: a screen with a
+  record dot, a microphone and a solid gear, taken from the C# build's geometry.
 
 ## [1.3.0] - Unreleased (test build)
 

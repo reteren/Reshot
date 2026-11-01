@@ -62,7 +62,8 @@ fn main() {
             _ => rest.strip_prefix('=').map(str::to_string),
         })
     });
-    let preview = cfg!(debug_assertions) && std::env::args().any(|a| a.eq_ignore_ascii_case("--preview-track-prompt"));
+    let preview = cfg!(debug_assertions)
+        && std::env::args().any(|a| ["--preview-track-prompt", "--preview-radial"].iter().any(|f| a.eq_ignore_ascii_case(f)));
     if !capture_now && settings_now.is_none() && !preview {
         match events_rx.recv_blocking() {
             Ok(first) => {
