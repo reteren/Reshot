@@ -288,8 +288,15 @@ impl CaptureDocument {
     /// Full export composite: base, effects, paint, then the Absolute Eraser punches the
     /// whole thing, base included, to transparency.
     pub fn render_composite(&self, base: &Bitmap) -> Bitmap {
-        let mut out = new_bitmap(self.width, self.height);
+        self.render_composite_region(base, IRect::from_wh(self.width, self.height))
+    }
+
+    /// [`Self::render_composite`] for `region` alone, at the region's size: an export of a
+    /// small selection on a 4480x1440 desktop composites 25 MB less per pass.
+    pub fn render_composite_region(&self, base: &Bitmap, region: IRect) -> Bitmap {
+        let mut out = new_bitmap(region.width().max(1), region.height().max(1));
         with_canvas(&mut out, |c| {
+            c.translate((-region.left as f32, -region.top as f32));
             c.draw_image(base.as_image(), (0, 0), None);
             self.draw_overlay(c);
             if self.has_absolute
@@ -471,6 +478,27 @@ mod tests {
         let out = d.render_composite(&base);
         assert_eq!(px(&out, 2, 10), [0, 0, 255, 255]); // BGRA red
         assert_eq!(px(&out, 15, 10), [255, 0, 0, 255]); // base blue
+    }
+
+    #[test]
+    fn a_region_composite_matches_the_same_pixels_of_the_full_one() {
+        let base = solid_base(30, 20, Color::BLUE);
+        let mut d = CaptureDocument::new(30, 20);
+        let mut red = stroke_paint(Color::RED, 3.0);
+        red.set_anti_alias(true);
+        d.commit_stroke(&rect_path(4.5, 3.5, 22.5, 15.5), &red, None);
+        d.absolute_erase(&rect_path(18.0, 0.0, 30.0, 6.0), None);
+        let full = d.render_composite(&base);
+        // Partly outside the frame on the left, as a selection dragged past the edge can be.
+        let region = IRect::from_ltrb(-3, 2, 25, 18);
+        let part = d.render_composite_region(&base, region);
+        for y in 0..region.height() {
+            for x in 0..region.width() {
+                let (fx, fy) = (x + region.left, y + region.top);
+                let want = if fx < 0 { [0, 0, 0, 0] } else { px(&full, fx, fy) };
+                assert_eq!(px(&part, x, y), want, "at {fx},{fy}");
+            }
+        }
     }
 
     #[test]

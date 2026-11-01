@@ -85,14 +85,15 @@ pub fn crop_masked(
     region: IRect,
     shape: Option<&Path>,
 ) -> Bitmap {
-    let composite = doc.render_composite(base);
+    // Composited at the region's size, then drawn once through the shape, so the anti-aliased
+    // edge of the shape is applied to the finished pixels exactly once.
+    let composite = doc.render_composite_region(base, region);
+    let Some(p) = shape else { return composite };
     let mut out = document::new_bitmap(region.width().max(1), region.height().max(1));
     document::with_canvas(&mut out, |c| {
         c.translate((-region.left as f32, -region.top as f32));
-        if let Some(p) = shape {
-            c.clip_path(p, None, true);
-        }
-        c.draw_image(composite.as_image(), (0, 0), None);
+        c.clip_path(p, None, true);
+        c.draw_image(composite.as_image(), (region.left, region.top), None);
     });
     out
 }

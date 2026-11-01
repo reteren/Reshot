@@ -134,7 +134,7 @@ pub struct Overlay {
 }
 
 impl Overlay {
-    pub fn open(frame: CapturedFrame, settings: AppSettings, cx: &mut App) -> Option<WindowHandle<Overlay>> {
+    pub fn open(mut frame: CapturedFrame, settings: AppSettings, cx: &mut App) -> Option<WindowHandle<Overlay>> {
         let r = PxRect {
             left: frame.virtual_left,
             top: frame.virtual_top,
@@ -143,7 +143,7 @@ impl Overlay {
         };
         let scale = winutil::primary_scale(cx);
         let base = export::bitmap_from_bgra(frame.width as i32, frame.height as i32, frame.stride, &frame.pixels_bgra);
-        let frame_image = frame_image::render_image(&frame);
+        let frame_image = frame_image::render_image(&mut frame);
         let origin = (frame.virtual_left, frame.virtual_top);
         let monitors = frame
             .monitors

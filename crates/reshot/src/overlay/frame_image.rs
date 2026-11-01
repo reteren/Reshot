@@ -46,8 +46,19 @@ pub fn from_premultiplied_bgra(width: u32, height: u32, stride: usize, bgra: &[u
     Arc::new(RenderImage::new(SmallVec::from_elem(Frame::new(image), 1)))
 }
 
-pub fn render_image(frame: &CapturedFrame) -> Arc<RenderImage> {
-    from_bgra(frame.width, frame.height, frame.stride, &frame.pixels_bgra)
+/// Takes the frame's pixels over when its rows are packed, as a capture's always are: the
+/// frame is dropped right after, and copying a 4480x1440 desktop once more costs a 25 MB
+/// allocation and several milliseconds before the overlay can appear.
+pub fn render_image(frame: &mut CapturedFrame) -> Arc<RenderImage> {
+    let (width, height) = (frame.width, frame.height);
+    let len = width as usize * 4 * height as usize;
+    if frame.stride != width as usize * 4 || frame.pixels_bgra.len() < len {
+        return from_bgra(width, height, frame.stride, &frame.pixels_bgra);
+    }
+    let mut buf = std::mem::take(&mut frame.pixels_bgra);
+    buf.truncate(len);
+    let image = RgbaImage::from_raw(width, height, buf).expect("buffer matches the image size");
+    Arc::new(RenderImage::new(SmallVec::from_elem(Frame::new(image), 1)))
 }
 
 #[cfg(test)]
