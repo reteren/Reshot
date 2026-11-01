@@ -394,7 +394,11 @@ mod tests {
         for (i, px) in pixels.chunks_exact_mut(4).enumerate() {
             // Left half a mid grey, right half a soft blue, as UI backgrounds are.
             let x = i % w as usize;
-            px.copy_from_slice(if x < 128 { &[0x80, 0x80, 0x80, 255] } else { &[0xC8, 0x8A, 0x5A, 255] });
+            px.copy_from_slice(if x < 128 {
+                &[0x80, 0x80, 0x80, 255]
+            } else {
+                &[0xC8, 0x8A, 0x5A, 255]
+            });
         }
         let desc = D3D11_TEXTURE2D_DESC {
             Width: w,
@@ -402,7 +406,10 @@ mod tests {
             MipLevels: 1,
             ArraySize: 1,
             Format: DXGI_FORMAT_B8G8R8A8_UNORM,
-            SampleDesc: DXGI_SAMPLE_DESC { Count: 1, Quality: 0 },
+            SampleDesc: DXGI_SAMPLE_DESC {
+                Count: 1,
+                Quality: 0,
+            },
             Usage: D3D11_USAGE_DEFAULT,
             BindFlags: 0,
             CPUAccessFlags: 0,
@@ -415,9 +422,22 @@ mod tests {
         };
         let mut texture = None;
         // SAFETY: The pixels and descriptor stay live during texture creation.
-        unsafe { d3d.device.CreateTexture2D(&desc, Some(&data), Some(&mut texture)) }?;
+        unsafe {
+            d3d.device
+                .CreateTexture2D(&desc, Some(&data), Some(&mut texture))
+        }?;
         let texture = texture.context("flat texture is null")?;
-        let converter = Nv12Converter::new(&d3d, w, h, Crop { left: 0, top: 0, width: w, height: h })?;
+        let converter = Nv12Converter::new(
+            &d3d,
+            w,
+            h,
+            Crop {
+                left: 0,
+                top: 0,
+                width: w,
+                height: h,
+            },
+        )?;
         let out = converter.convert(&d3d, &texture)?;
         let distinct = |x0: usize, x1: usize| {
             let mut v: Vec<u8> = (0..h as usize)
