@@ -8,6 +8,10 @@ project adheres to [Semantic Versioning](https://semver.org/).
 ### Changed
 
 - Hardness is 100% by default, so every tool starts with a crisp edge.
+- With several selections (`Ctrl`), one lying inside another (at most a tenth of it
+  outside) cuts a hole in it, and one reaching further out extends the area. The dimming,
+  the export, recording and drawing all follow the same region; before, a selection inside
+  another only looked cut out while the export still took the whole outer one.
 
 ### Fixed
 

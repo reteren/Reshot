@@ -2,7 +2,7 @@
 //! draw, move and resize them. Everything here is in frame pixels; tolerances that the C#
 //! build expressed in DIPs are multiplied by the display scale by the caller.
 
-use skia_safe::{Color, IRect, Paint, Path, PathBuilder, Point, Rect};
+use skia_safe::{Color, IRect, Paint, Path, PathBuilder, PathOp, Point, Rect, path::Verb};
 
 /// The selection sub-tools from SPEC §4.2.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Default)]
@@ -49,6 +49,39 @@ impl Selection {
 
     pub fn has_area(&self) -> bool {
         self.bounds.width() > 0.0 && self.bounds.height() > 0.0
+    }
+
+    /// The outline as a closed polygon (an ellipse as 96 points): what the overlay outlines and
+    /// dims with.
+    pub fn polygon(&self) -> Vec<Point> {
+        let b = self.bounds;
+        match self.kind {
+            ShapeKind::Rectangle => vec![
+                Point::new(b.left, b.top),
+                Point::new(b.right, b.top),
+                Point::new(b.right, b.bottom),
+                Point::new(b.left, b.bottom),
+            ],
+            ShapeKind::Triangle => {
+                vec![Point::new(b.center_x(), b.top), Point::new(b.right, b.bottom), Point::new(b.left, b.bottom)]
+            }
+            ShapeKind::Ellipse => {
+                let (cx, cy, rx, ry) = (b.center_x(), b.center_y(), b.width() / 2.0, b.height() / 2.0);
+                let n = 96;
+                (0..n)
+                    .map(|i| {
+                        let a = i as f32 / n as f32 * std::f32::consts::TAU;
+                        Point::new(cx + rx * a.cos(), cy + ry * a.sin())
+                    })
+                    .collect()
+            }
+            ShapeKind::Lasso | ShapeKind::Polygon => {
+                if self.normalized.len() < 2 {
+                    return Selection::new(ShapeKind::Rectangle, b).polygon();
+                }
+                self.normalized.iter().map(|n| Point::new(b.left + n.x * b.width(), b.top + n.y * b.height())).collect()
+            }
+        }
     }
 
     /// The outline within the current bounds.
@@ -279,6 +312,51 @@ impl RatioLock {
     }
 }
 
+/// Share of a selection that has to lie inside the larger ones for it to cut a hole.
+pub const CUT_SHARE: f32 = 0.9;
+
+/// Grid the share and area estimates sample a selection's box with, per side.
+const SAMPLES: usize = 48;
+
+/// Sample points (cell centres) of a selection's box that fall inside its shape.
+fn samples_inside(s: &Selection) -> impl Iterator<Item = Point> + '_ {
+    let path = s.path();
+    let b = s.bounds;
+    (0..SAMPLES * SAMPLES).filter_map(move |i| {
+        let (x, y) = ((i % SAMPLES) as f32 + 0.5, (i / SAMPLES) as f32 + 0.5);
+        let p = Point::new(b.left + x / SAMPLES as f32 * b.width(), b.top + y / SAMPLES as f32 * b.height());
+        path.contains(p).then_some(p)
+    })
+}
+
+/// Approximate area of a selection's shape.
+fn area(s: &Selection) -> f32 {
+    let inside = samples_inside(s).count() as f32;
+    s.bounds.width() * s.bounds.height() * inside / (SAMPLES * SAMPLES) as f32
+}
+
+/// Share (0..1) of a selection's shape that lies inside `region`.
+fn share_inside(s: &Selection, region: &Path) -> f32 {
+    let (mut all, mut inside) = (0usize, 0usize);
+    for p in samples_inside(s) {
+        all += 1;
+        inside += usize::from(region.contains(p));
+    }
+    if all == 0 { 0.0 } else { inside as f32 / all as f32 }
+}
+
+fn polygon_path(points: &[Point]) -> Path {
+    let mut p = PathBuilder::new();
+    if let Some((first, rest)) = points.split_first() {
+        p.move_to(*first);
+        for q in rest {
+            p.line_to(*q);
+        }
+        p.close();
+    }
+    p.detach()
+}
+
 /// The active selection plus the extra ones kept with Ctrl+drag.
 #[derive(Clone, Debug, Default)]
 pub struct SelectionSet {
@@ -297,18 +375,99 @@ impl SelectionSet {
         self.all().next().is_none()
     }
 
-    /// Union of every selection's outline: the clip for editing tools and the export mask.
-    pub fn clip_path(&self) -> Option<Path> {
-        let mut it = self.all();
-        let first = it.next()?.path();
-        Some(it.fold(first, |acc, s| {
-            acc.op(&s.path(), skia_safe::PathOp::Union).unwrap_or(acc)
-        }))
+    /// Which selections cut a hole instead of adding area, in the order of [`Self::all`].
+    ///
+    /// A selection is a cut-out when at least [`CUT_SHARE`] of it lies inside the larger
+    /// selections that add area: drawn inside another one (or poking out of it by no more
+    /// than a tenth), it cuts a hole in it; reaching further out, it extends the selected
+    /// area. Deciding by size rather than by drawing order keeps the answer stable while
+    /// selections are moved, resized or picked up again.
+    pub fn cuts(&self) -> Vec<bool> {
+        let all: Vec<&Selection> = self.all().collect();
+        let areas: Vec<f32> = all.iter().map(|s| area(s)).collect();
+        let mut order: Vec<usize> = (0..all.len()).collect();
+        order.sort_by(|&a, &b| areas[b].total_cmp(&areas[a]).then(a.cmp(&b)));
+        let mut cuts = vec![false; all.len()];
+        let mut added: Option<Path> = None;
+        for i in order {
+            match &added {
+                Some(u) if share_inside(all[i], u) >= CUT_SHARE => cuts[i] = true,
+                _ => {
+                    let p = all[i].path();
+                    added = Some(match added.take() {
+                        Some(u) => u.op(&p, PathOp::Union).unwrap_or(u),
+                        None => p,
+                    });
+                }
+            }
+        }
+        cuts
     }
 
-    /// Union of the bounding boxes.
+    /// The selections that add area.
+    fn adding(&self) -> impl Iterator<Item = &Selection> {
+        self.all().zip(self.cuts()).filter(|(_, cut)| !cut).map(|(s, _)| s)
+    }
+
+    /// The selected region with `shape` as each selection's outline: the adding ones united,
+    /// minus the cut-outs.
+    fn combine(&self, shape: impl Fn(&Selection) -> Path) -> Option<Path> {
+        let (mut added, mut cut): (Option<Path>, Option<Path>) = (None, None);
+        for (s, is_cut) in self.all().zip(self.cuts()) {
+            let acc = if is_cut { &mut cut } else { &mut added };
+            let p = shape(s);
+            *acc = Some(match acc.take() {
+                Some(u) => u.op(&p, PathOp::Union).unwrap_or(u),
+                None => p,
+            });
+        }
+        let added = added?;
+        Some(match cut {
+            Some(c) => added.op(&c, PathOp::Difference).unwrap_or(added),
+            None => added,
+        })
+    }
+
+    /// The selected region: the clip for editing tools and the export mask.
+    pub fn clip_path(&self) -> Option<Path> {
+        self.combine(Selection::path)
+    }
+
+    /// The selected region's outline as closed polygons (holes included), for the overlay's
+    /// even-odd dim.
+    pub fn region_polygons(&self) -> Vec<Vec<Point>> {
+        let Some(path) = self.combine(|s| polygon_path(&s.polygon())) else {
+            return Vec::new();
+        };
+        let mut out = Vec::new();
+        let mut cur: Vec<Point> = Vec::new();
+        for (verb, pts) in skia_safe::path::Iter::new(&path, true) {
+            match verb {
+                Verb::Move => {
+                    if cur.len() > 2 {
+                        out.push(std::mem::take(&mut cur));
+                    }
+                    cur = vec![pts[0]];
+                }
+                Verb::Close | Verb::Done => {
+                    if cur.len() > 2 {
+                        out.push(std::mem::take(&mut cur));
+                    }
+                    cur.clear();
+                }
+                // Polygons in, polygons out; anything curved still ends at its last point.
+                _ => cur.extend(pts.last().copied()),
+            }
+        }
+        if cur.len() > 2 {
+            out.push(cur);
+        }
+        out
+    }
+
+    /// Union of the bounding boxes of the selections that add area.
     pub fn union_bounds(&self) -> Option<Rect> {
-        let mut it = self.all();
+        let mut it = self.adding();
         let mut r = it.next()?.bounds;
         for s in it {
             r.join(s.bounds);
@@ -350,7 +509,7 @@ impl SelectionSet {
     /// `width` x `height` frame. This is what export crops and what recording captures.
     pub fn pixel_union(&self, width: i32, height: i32) -> Option<IRect> {
         let mut u: Option<IRect> = None;
-        for s in self.all() {
+        for s in self.adding() {
             let b = s.bounds;
             let r = IRect::from_ltrb(
                 (b.left.round() as i32).clamp(0, width),
@@ -373,15 +532,14 @@ impl SelectionSet {
         if all.len() == 1 && all[0].kind == ShapeKind::Rectangle {
             return None;
         }
+        let region = self.clip_path()?;
         let mut bmp = crate::document::new_bitmap(union.width(), union.height());
         crate::document::with_canvas(&mut bmp, |c| {
             c.translate((-union.left as f32, -union.top as f32));
             let mut p = Paint::default();
             p.set_color(Color::WHITE);
             p.set_anti_alias(true);
-            for s in &all {
-                c.draw_path(&s.path(), &p);
-            }
+            c.draw_path(&region, &p);
         });
         let rb = bmp.row_bytes();
         let px = crate::document::pixels(&bmp);
@@ -583,5 +741,43 @@ mod tests {
         assert!(!clip.contains((15.0, 5.0)));
         set.commit_active(false);
         assert!(set.is_empty());
+    }
+
+    fn set_of(rects: &[Rect]) -> SelectionSet {
+        SelectionSet {
+            active: None,
+            committed: rects.iter().map(|&b| Selection::new(ShapeKind::Rectangle, b)).collect(),
+        }
+    }
+
+    #[test]
+    fn a_selection_inside_another_cuts_a_hole() {
+        let set = set_of(&[r(0.0, 0.0, 100.0, 100.0), r(30.0, 30.0, 60.0, 60.0)]);
+        assert_eq!(set.cuts(), vec![false, true]);
+        let clip = set.clip_path().unwrap();
+        assert!(clip.contains((10.0, 10.0)));
+        assert!(!clip.contains((45.0, 45.0)), "the hole");
+        assert_eq!(set.region_polygons().len(), 2, "outer edge and the hole");
+        assert_eq!(set.union_bounds(), Some(r(0.0, 0.0, 100.0, 100.0)));
+    }
+
+    #[test]
+    fn the_order_they_were_drawn_in_does_not_matter() {
+        let set = set_of(&[r(30.0, 30.0, 60.0, 60.0), r(0.0, 0.0, 100.0, 100.0)]);
+        assert_eq!(set.cuts(), vec![true, false]);
+    }
+
+    #[test]
+    fn poking_out_by_a_tenth_still_cuts_further_extends() {
+        // 100 px wide, 8 px of it past the edge: 92% inside.
+        let set = set_of(&[r(0.0, 0.0, 200.0, 200.0), r(108.0, 50.0, 208.0, 100.0)]);
+        assert_eq!(set.cuts(), vec![false, true]);
+        // 30 px past the edge: 70% inside, so it extends the area.
+        let set = set_of(&[r(0.0, 0.0, 200.0, 200.0), r(130.0, 50.0, 230.0, 100.0)]);
+        assert_eq!(set.cuts(), vec![false, false]);
+        let clip = set.clip_path().unwrap();
+        assert!(clip.contains((150.0, 75.0)), "the overlap stays selected");
+        assert!(clip.contains((220.0, 75.0)));
+        assert_eq!(set.region_polygons().len(), 1, "one merged outline");
     }
 }

@@ -171,6 +171,7 @@ impl Render for Overlay {
             size: (fw, fh),
             dim: dim_color(&self.settings),
             outlines: self.sel.all().map(chrome::outline).collect(),
+            region: self.sel.region_polygons(),
             polygon: self.polygon.clone().map(|p| (p, self.polygon_cursor)),
             handles: if show_handles && self.polygon.is_none() { self.sel.active.as_ref().map(|a| a.bounds) } else { None },
             handle_size: HANDLE_SIZE,

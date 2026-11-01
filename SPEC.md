@@ -41,6 +41,11 @@ Session rules:
 - A new selection with the same tool replaces the old one, and the old one is removed along
   with its edits.
 - **Multiple selections:** holding `Ctrl` creates several active selections at once.
+  A selection with at least 90% of its area inside larger selections (drawn inside one, or
+  poking out of it by no more than a tenth) cuts a hole in them; one reaching further out
+  extends the selected area. The rule goes by size, not drawing order, so it holds while
+  selections are moved and resized. Holes stay dimmed, and export, recording and drawing
+  leave them out.
 - `Ctrl+A` selects the primary monitor. Pressing it again in the same session extends the
   selection to **all monitors**.
 
