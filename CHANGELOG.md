@@ -3,7 +3,7 @@
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and this
 project adheres to [Semantic Versioning](https://semver.org/).
 
-## [1.2.9] - Unreleased
+## [1.2.9] - Unreleased (test build)
 
 ### Added
 
