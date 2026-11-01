@@ -99,6 +99,7 @@ enum Slider {
     Dim,
     Quality,
     Corners,
+    Bitrate,
 }
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum Select {
@@ -126,7 +127,7 @@ pub struct SettingsWindow {
     mics: Vec<(String, String)>,
     status: String,
     last_print_screen: bool,
-    slider_bounds: [Rc<Cell<Bounds<Pixels>>>; 3],
+    slider_bounds: [Rc<Cell<Bounds<Pixels>>>; 4],
     /// The Info tab's two independently scrolling columns.
     scroll: [ScrollHandle; 2],
     /// Whether each column overflowed at the last paint, which decides its scrollbar.
@@ -376,18 +377,29 @@ impl SettingsWindow {
             Slider::Dim => (self.draft.dim.opacity * 100.0).round() as i32,
             Slider::Quality => self.draft.format.quality,
             Slider::Corners => (self.draft.video.corners.opacity * 100.0).round() as i32,
+            Slider::Bitrate => self.draft.video.min_bitrate_kbps,
         }
     }
     fn slider_range(key: Slider) -> (i32, i32) {
-        if key == Slider::Quality { (1, 100) } else { (0, 100) }
+        match key {
+            Slider::Quality => (1, 100),
+            Slider::Bitrate => (2_000, 20_000),
+            _ => (0, 100),
+        }
+    }
+    /// What one wheel notch moves a slider by; dragging snaps to it too.
+    fn slider_step(key: Slider) -> i32 {
+        if key == Slider::Bitrate { 500 } else { 1 }
     }
     fn set_slider(&mut self, key: Slider, value: i32) {
         let (min, max) = Self::slider_range(key);
-        let value = value.clamp(min, max);
+        let step = Self::slider_step(key);
+        let value = (((value - min) as f32 / step as f32).round() as i32 * step + min).clamp(min, max);
         match key {
             Slider::Dim => self.draft.dim.opacity = value as f64 / 100.0,
             Slider::Quality => self.draft.format.quality = value,
             Slider::Corners => self.draft.video.corners.opacity = value as f64 / 100.0,
+            Slider::Bitrate => self.draft.video.min_bitrate_kbps = value,
         }
         self.status.clear();
     }

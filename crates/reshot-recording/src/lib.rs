@@ -1,6 +1,7 @@
 //! Video and audio recording, ffmpeg encoding, and Windows WASAPI sources.
 
 mod args;
+pub use args::video_bitrate;
 mod audio;
 mod encoder;
 mod ffmpeg;

@@ -9,6 +9,14 @@ pub struct H264Tuning {
     pub extra_args: Option<&'static str>,
 }
 
+/// The video bitrate (bit/s) for an area: `width * height * fps * 0.08`, at most 40 Mbit/s,
+/// and never below `min_kbps` (clamped to 2000..20000 kbit/s).
+pub fn video_bitrate(width: u32, height: u32, fps: u32, min_kbps: i32) -> u32 {
+    let floor = (min_kbps.clamp(2_000, 20_000) as u64) * 1_000;
+    let auto = (width as u64 * height as u64 * fps as u64 * 8) / 100;
+    auto.clamp(2_000_000, 40_000_000).max(floor) as u32
+}
+
 impl FfmpegArgs {
     pub fn default_tuning(encoder: &str) -> H264Tuning {
         match encoder {
@@ -125,6 +133,20 @@ impl FfmpegArgs {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_bitrate_floor_only_ever_raises_it() {
+        // A small area: the automatic rate is below 2 Mbit/s, so the floor decides.
+        assert_eq!(video_bitrate(800, 400, 30, 2000), 2_000_000);
+        assert_eq!(video_bitrate(800, 400, 30, 8000), 8_000_000);
+        // A big area already above the floor keeps its own rate.
+        assert_eq!(video_bitrate(2560, 1440, 60, 8000), 17_694_720);
+        // Out-of-range settings are clamped.
+        assert_eq!(video_bitrate(800, 400, 30, 0), 2_000_000);
+        assert_eq!(video_bitrate(800, 400, 30, 99_000), 20_000_000);
+        // 40 Mbit/s caps the automatic rate, not the user's floor.
+        assert_eq!(video_bitrate(7680, 4320, 60, 2000), 40_000_000);
+    }
 
     const NONE: H264Tuning = H264Tuning {
         preset: None,

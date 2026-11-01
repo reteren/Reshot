@@ -112,7 +112,11 @@ impl SettingsWindow {
         let v = self.slider_value(key);
         let (min, max) = Self::slider_range(key);
         let f = (v - min) as f32 / (max - min) as f32;
-        let display = if key == Slider::Quality { v.to_string() } else { format!("{v}%") };
+        let display = match key {
+            // The value column fits "100%"; the unit sits in the row's name instead.
+            Slider::Quality | Slider::Bitrate => v.to_string(),
+            _ => format!("{v}%"),
+        };
         let thumb_id: SharedString = format!("thumb-{}", key as usize).into();
         let thumb = div().absolute().top(px(-3.)).left(relative(f)).ml(px(1. - 12. * f)).w(px(10.)).h(px(18.)).bg(theme::btn_bg());
         let thumb = if self.slider == Some(key) { vgui::pressed(thumb, &thumb_id) } else { raised(thumb, &thumb_id, false) };
@@ -153,7 +157,7 @@ impl SettingsWindow {
             .on_scroll_wheel(cx.listener(move |this, e: &gpui::ScrollWheelEvent, window, cx| {
                 let dy = f32::from(e.delta.pixel_delta(window.line_height()).y);
                 if dy != 0.0 {
-                    this.set_slider(key, this.slider_value(key) + dy.signum() as i32);
+                    this.set_slider(key, this.slider_value(key) + dy.signum() as i32 * SettingsWindow::slider_step(key));
                     cx.notify();
                 }
             }));
@@ -385,6 +389,8 @@ impl SettingsWindow {
                 column()
                     .child(para("Recording:"))
                     .child(input_group("Frame rate").child(self.select(Select::Fps, Some(90.), cx)))
+                    .child(self.slider_row(Slider::Bitrate, "Bitrate, kbps", cx))
+                    .child(hint("The lowest bitrate a recording gets. Larger areas get more on their own; raise it for sharper video of small areas, at the cost of bigger files."))
                     .child(separator())
                     .child(para("Recording indicator:"))
                     .child(self.check(Toggle::Corners, "Show corner brackets", true, cx))

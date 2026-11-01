@@ -3,6 +3,14 @@
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and this
 project adheres to [Semantic Versioning](https://semver.org/).
 
+## [1.3.2] - Unreleased
+
+### Added
+
+- A **Bitrate, kbps** slider in Settings → Video (2000–20000, 2000 by default): the lowest
+  bitrate a recording gets. Larger areas still get more on their own; small ones, which
+  always got 2000, can now be recorded sharper.
+
 ## [1.3.1] - Unreleased (test build)
 
 ### Changed

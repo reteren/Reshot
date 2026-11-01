@@ -129,8 +129,7 @@ pub fn start_video_with(
     } else {
         settings.video.fps as u32
     };
-    let bitrate =
-        ((width as u64 * height as u64 * fps as u64 * 8) / 100).clamp(2_000_000, 40_000_000) as u32;
+    let bitrate = reshot_recording::video_bitrate(width, height, fps, settings.video.min_bitrate_kbps);
     let sources = sources.unwrap_or_else(|| AudioSources {
         system_full: settings.video.audio.system,
         mic: settings.video.audio.mic,

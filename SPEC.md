@@ -206,6 +206,9 @@ Technical parameters:
 
 - Container and codec: **MP4 / H.264 with hardware encoding** (NVENC, AMF, QSV).
 - FPS: a setting, 60 by default, with 30 and 25 available.
+- Bitrate: worked out from the area, `width × height × fps × 0.08` bit/s, at most 40 Mbit/s.
+  A Bitrate slider (Settings → Video, 2000–20000 kbps in steps of 500, default 2000) sets
+  the lowest rate a recording gets, so small areas can be recorded sharper.
 - **Audio sources**: the microphone, the full system mix, or individual applications
   through Windows process loopback (Windows 11). Right-clicking the record tool opens the
   source picker.
@@ -307,6 +310,7 @@ Stored as JSON in `%AppData%\reshot\settings.json`.
 | `quality` | `90` | JPG and WebP quality |
 | `filename.template` | `Reshot_{date}_{time}` | File name template |
 | `video.fps` | `60` | 60, 30 or 25 |
+| `video.minBitrateKbps` | `2000` | Lowest video bitrate, 2000–20000 kbit/s |
 | `video.audio.mic` | `true` | Record the microphone track |
 | `video.audio.system` | `true` | Record system sound |
 | `video.audio.askOnSave` | `true` | Ask which tracks to keep after recording |

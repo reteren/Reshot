@@ -93,6 +93,10 @@ section!(FilenameSettings {
 section!(VideoSettings {
     /// 60 / 30 / 25.
     fps: i32 = 60,
+    /// Lowest video bitrate, in kbit/s (2000..20000). The bitrate is worked out from the
+    /// recorded area and frame rate and never goes below this; 2000 is what small areas
+    /// always got.
+    min_bitrate_kbps: i32 = 2000,
     audio: VideoAudioSettings = VideoAudioSettings::default(),
     corners: VideoCornersSettings = VideoCornersSettings::default(),
 });
