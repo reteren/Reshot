@@ -11,7 +11,7 @@ use skia_safe::{
 
 use crate::document::{self, CaptureDocument, Layer};
 use crate::history::{LayerRegionCommand, UndoHistory};
-use crate::soft::{self, Coverage};
+use crate::soft::SoftStroke;
 use crate::tools::{BrushSettings, VectorKind, VectorObject};
 
 /// Every drawing sub-tool (SPEC §5).
@@ -156,17 +156,14 @@ struct RegionGesture {
     rect_mode: bool,
     rect: Rect,
     clip: Option<Path>,
-    /// Frame area the stroke has touched so far: what the commit snapshots for undo.
-    drawn: Option<IRect>,
     /// Bumped by every new point, so the per-frame cache below knows when it is stale.
     generation: u64,
-    /// The latest segment: all a move changes on screen.
-    prev: Point,
-    last: Point,
-    /// The stroke's coverage, built a segment at a time with the brush's hardness (see
-    /// [`soft`]). A move adds only its own capsule instead of redoing the whole stroke, and
-    /// the commit uses exactly what the preview showed.
-    coverage: Coverage,
+    /// The soft stroke (not for a Ctrl-rect), built a piece at a time with the brush's
+    /// hardness (see [`soft`]). A move adds only its own pieces instead of redoing the whole
+    /// stroke, and the commit uses exactly what the preview showed.
+    stroke: Option<SoftStroke>,
+    /// What the latest point changed on screen.
+    damage: Option<IRect>,
     /// What every tile of one frame shares: the rect's area and the coverage image at
     /// `generation`.
     frame: Option<(u64, Option<Path>, Option<PlacedCoverage>)>,
@@ -315,10 +312,7 @@ impl Editor {
         if let Some((v, start)) = &mut self.shape {
             update_shape(v, *start, p);
         }
-        if let Some(tool) = self.region.as_ref().map(|r| r.tool) {
-            let (radius, hardness, strength) = self.stroke_profile(tool);
-            let frame = (self.width(), self.height());
-            let r = self.region.as_mut().expect("checked above");
+        if let Some(r) = self.region.as_mut() {
             r.generation += 1;
             if r.rect_mode {
                 r.rect = Rect::from_ltrb(
@@ -328,9 +322,7 @@ impl Editor {
                     r.start.y.max(p.y),
                 );
             } else {
-                (r.prev, r.last) = (r.last, p);
-                let touched = soft::accumulate_segment(&mut r.coverage, frame, r.prev, p, radius, hardness, strength);
-                r.drawn = soft::join(r.drawn, touched);
+                r.damage = r.stroke.as_mut().and_then(|s| s.add(p));
             }
         }
     }
@@ -449,32 +441,30 @@ impl Editor {
     // ---- Effects and erasers --------------------------------------------------------------
 
     pub fn begin_region(&mut self, tool: DrawTool, p: Point, rect_mode: bool, clip: Option<Path>) {
-        let mut coverage = None;
-        let mut drawn = None;
-        if !rect_mode {
+        let stroke = (!rect_mode).then(|| {
             // A press alone leaves a dot.
             let (radius, hardness, strength) = self.stroke_profile(tool);
-            drawn = soft::accumulate_segment(&mut coverage, (self.width(), self.height()), p, p, radius, hardness, strength);
-        }
+            SoftStroke::new((self.width(), self.height()), p, radius, hardness, strength)
+        });
+        let damage = stroke.as_ref().and_then(|s| s.drawn());
         self.region = Some(RegionGesture {
             tool,
             start: p,
             rect_mode,
             rect: Rect::from_xywh(p.x, p.y, 0.0, 0.0),
             clip,
-            drawn,
             generation: 0,
-            prev: p,
-            last: p,
-            coverage,
+            stroke,
+            damage,
             frame: None,
         });
     }
 
     /// A stroke's radius, hardness and coverage strength. The brush is as wide as its size;
-    /// effects and erasers keep the 10 px minimum they always had. Erasers bake their opacity
-    /// into the coverage (that is how much they remove); the brush applies its opacity to the
-    /// finished stroke instead, and an effect's opacity is its strength, not its coverage.
+    /// effects and erasers keep the 10 px minimum they always had. Erasers scale their
+    /// coverage by their opacity (that is how much they remove); the brush applies its opacity
+    /// to the finished stroke instead, and an effect's opacity is its strength, not its
+    /// coverage.
     fn stroke_profile(&self, tool: DrawTool) -> (f32, f32, f32) {
         let s = self.settings(tool);
         let radius = if tool == DrawTool::Brush { (s.thickness / 2.0).max(0.5) } else { s.thickness.max(10.0) / 2.0 };
@@ -496,7 +486,7 @@ impl Editor {
                 };
                 (Some(area), cov)
             } else {
-                (None, r.coverage.as_ref().map(|(at, b)| (*at, b.as_image())))
+                (None, r.stroke.as_ref().and_then(|s| s.coverage()).map(|(at, b)| (at, b.as_image())))
             };
             let generation = r.generation;
             self.region.as_mut().expect("checked above").frame = Some((generation, area, cov));
@@ -586,7 +576,7 @@ impl Editor {
 
     fn end_region(&mut self) {
         let Some(r) = self.region.take() else { return };
-        let region = if r.rect_mode { self.to_region(r.rect) } else { r.drawn };
+        let region = if r.rect_mode { self.to_region(r.rect) } else { r.stroke.as_ref().and_then(|s| s.drawn()) };
         let Some(region) = region else {
             return;
         };
@@ -666,7 +656,7 @@ impl Editor {
                 let mut fill = Paint::default();
                 fill.set_color(Color::from_rgb(v, v, v));
                 c.draw_rect(r.rect, &fill);
-            } else if let Some((at, stamped)) = &r.coverage {
+            } else if let Some((at, stamped)) = r.stroke.as_ref().and_then(|s| s.coverage()) {
                 c.draw_image(stamped.as_image(), (at.left, at.top), None);
             }
         });
@@ -690,18 +680,12 @@ impl Editor {
         if let Some((v, _)) = &self.shape {
             add(v.compute_bounds(), v.padding());
         }
-        // Only the latest segment changes on screen: earlier stamps and outline stay put.
+        // Only what the latest point changed is repainted: the rest of the stroke stays put.
         if let Some(r) = &self.region {
             if r.rect_mode {
                 add(r.rect, 2.0);
-            } else {
-                let segment = Rect::from_ltrb(
-                    r.prev.x.min(r.last.x),
-                    r.prev.y.min(r.last.y),
-                    r.prev.x.max(r.last.x),
-                    r.prev.y.max(r.last.y),
-                );
-                add(segment, self.stroke_profile(r.tool).0 + 2.0);
+            } else if let Some(d) = r.damage {
+                add(Rect::from_irect(d), 1.0);
             }
         }
         if let Some(t) = &self.text {

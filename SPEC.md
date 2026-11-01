@@ -94,11 +94,13 @@ Session rules:
 Every tool keeps its **own** size, opacity, hardness and colour, so switching tools does
 not carry the previous tool's settings over.
 
-**Hardness** (every tool but text, default 85%) works as in hive: a brush of radius `r` is
+**Hardness** (every tool but text, default 100%) works as in hive: a brush of radius `r` is
 solid out to `r × hardness` (always leaving a one-pixel anti-aliased rim) and fades to
 nothing at `r` along a smoothstep. A stroke is one continuous shape built from capsules
-between the mouse positions, so a soft stroke has a smooth edge with no dab ripples and
-never builds up where it passes over itself. Shapes and lines soften by blurring their
+along a smooth curve through the mouse positions, so a soft stroke has a smooth edge with
+no dab ripples and no creases at sharp turns. Where a stroke crosses itself its soft edges
+add up like paint, so a crossing shows no diagonal seams; its solid part never exceeds the
+stroke's opacity. Shapes and lines soften by blurring their
 outline by `width × (1 − hardness) × 0.35`.
 
 ## 6. Drawing

@@ -121,18 +121,30 @@ alpha(d) = 1 - smoothstep((d - core) / (r - core))   core < d <= r
 alpha(d) = 0                                    d > r
 ```
 
-`d` is the distance to the stroke's **segment**, not to a dab centre: each mouse move adds a
-capsule from the previous point to the new one, so a soft stroke is one continuous shape
-with no ripples from discrete dabs.
+`d` is the distance to the stroke's **segment**, not to a dab centre, so a soft stroke is
+one continuous shape with no ripples from discrete dabs. Two more pieces of hive keep it
+free of creases:
+
+- **Corners are curves.** A soft polyline shows each corner as a diagonal crease on its
+  inner side, so the mouse points are joined by a centripetal Catmull-Rom curve cut into
+  pieces that turn by at most 3°. The curve through a point needs the next one, so the last
+  piece up to the pointer is provisional: the pixels under it are saved, and the next move
+  puts them back before drawing the piece for real.
+- **Crossings composite.** Every pixel remembers the path length at which the stroke last
+  touched it. Touched again within `max(4, 1.5 r)` of path (neighbouring pieces, a resting
+  pointer) it keeps the maximum, so joints never build up; touched by a later pass
+  (crossing, going back over) the new pass is composited over the earlier ones,
+  `a + b (1 − a)`, with a smooth blend between the two rules over the next two windows.
+  Pure max left dark diagonal creases at crossings, where both passes give the same alpha.
 
 The stroke is rasterised into a greyscale **coverage bitmap** whose luminance is the
-strength. Capsules keep the per-pixel maximum rather than accumulating, so a stroke never
-builds up where it passes over itself, and a move adds only its own capsule. How the
-finished coverage is used depends on the tool:
+strength, and a move rewrites only what its pieces touch. Strength scales the whole coverage
+once, so the solid part never builds up past it. How the finished coverage is used depends
+on the tool:
 
 - **Brush**: tinted with the colour and laid on the paint layer once, at the brush opacity.
 - **Blur, pixelation**: the effect source is drawn through it onto the effects layer.
-- **Erasers**: the eraser opacity is baked into the coverage, which is applied once with
+- **Erasers**: the eraser opacity is the coverage's strength, and it is applied once with
   `BlendMode::DstOut` (or accumulated into the punch-through mask for the Absolute Eraser).
 
 Shapes and lines are vectors until committed, so they soften differently: their outline is

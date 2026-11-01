@@ -8,8 +8,8 @@ use skia_safe::{
 
 use crate::{fonts, soft};
 
-/// hive's default brush hardness.
-pub const DEFAULT_HARDNESS: f32 = 0.85;
+/// Default hardness: a crisp edge until the user softens it.
+pub const DEFAULT_HARDNESS: f32 = 1.0;
 
 /// Brush appearance (SPEC §6.1).
 #[derive(Clone, Debug, PartialEq)]

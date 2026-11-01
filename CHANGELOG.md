@@ -3,6 +3,18 @@
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and this
 project adheres to [Semantic Versioning](https://semver.org/).
 
+## [1.3.0] - Unreleased
+
+### Changed
+
+- Hardness is 100% by default, so every tool starts with a crisp edge.
+
+### Fixed
+
+- Soft strokes no longer show diagonal seams where they cross themselves or turn sharply:
+  the stroke follows a smooth curve through the mouse points, and where it crosses itself
+  its soft edges add up like paint instead of keeping the larger of the two, as hive does.
+
 ## [1.2.9] - Unreleased (test build)
 
 ### Added
