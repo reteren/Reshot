@@ -117,7 +117,6 @@ pub fn monitor_bounds(x: i32, y: i32) -> PxRect {
 /// the whole desktop shifting while the overlay is up. The window is placed once, the insets
 /// measured, and the window grown by them.
 pub fn place_topmost(hwnd: HWND, r: PxRect) {
-    no_frame(hwnd);
     // SAFETY: hwnd belongs to this process; the out-parameters are locals.
     unsafe {
         let _ = SetWindowPos(hwnd, Some(HWND_TOPMOST), r.left, r.top, r.width(), r.height(), SWP_SHOWWINDOW);
@@ -150,7 +149,8 @@ pub fn place_topmost(hwnd: HWND, r: PxRect) {
 /// Because gpui's borderless windows keep `WS_CAPTION`, Windows 11 gives them the frame of a
 /// normal window, drawn around the whole window rectangle. Over a transparent window (the
 /// radial menu is a circle in a square) that showed as a faint square outline with a shadow
-/// around nothing.
+/// around nothing. Opt-in per window: the recording corners keep the frame on purpose, as it
+/// outlines the recorded area with a soft shadow.
 pub fn no_frame(hwnd: HWND) {
     use windows::Win32::Graphics::Dwm::{
         DWMNCRP_DISABLED, DWMWA_BORDER_COLOR, DWMWA_NCRENDERING_POLICY, DwmSetWindowAttribute,

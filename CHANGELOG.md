@@ -5,6 +5,11 @@ project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [1.3.2] - Unreleased
 
+### Fixed
+
+- The thin outline and soft shadow around the recorded area are back; 1.3.1 had removed them
+  along with the radial menu's frame.
+
 ### Added
 
 - A **Bitrate, kbps** slider in Settings → Video (2000–20000, 2000 by default): the lowest
@@ -23,8 +28,9 @@ project adheres to [Semantic Versioning](https://semver.org/).
 
 - The Audio Tracks window after a recording uses the settings dialog's font, caption,
   close glyph, checkboxes and button, and its Save button is no longer cut off.
-- The radial menu and the other pop-ups no longer show a faint square outline and shadow
-  around them: Windows drew a normal window frame around the whole (transparent) window.
+- The radial menu, the Audio Tracks window and the tray menu no longer show a faint square
+  outline and shadow around them: Windows drew a normal window frame around the whole
+  (transparent) window.
 - The radial menu's icons are the ones from before the Rust rewrite again: a screen with a
   record dot, a microphone and a solid gear, taken from the C# build's geometry.
 

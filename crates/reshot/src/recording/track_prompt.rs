@@ -96,6 +96,7 @@ impl TrackPrompt {
             let raw = hwnd.0 as isize;
             winutil::after_update(cx, move || {
                 let hwnd = win::hwnd(raw);
+                win::no_frame(hwnd);
                 win::place_topmost(hwnd, rect);
                 win::force_foreground(hwnd, false);
             });

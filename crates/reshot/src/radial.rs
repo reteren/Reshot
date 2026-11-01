@@ -110,6 +110,7 @@ pub fn open(cx: &mut App, vk: u32) {
             if game {
                 win::unlock_input_from_game();
             }
+            win::no_frame(hwnd);
             win::place_topmost(hwnd, bounds);
             win::force_foreground(hwnd, game);
         });

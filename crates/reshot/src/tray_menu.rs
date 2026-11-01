@@ -63,6 +63,7 @@ impl TrayMenu {
             let raw = h.0 as isize;
             winutil::after_update(cx, move || {
                 let h = win::hwnd(raw);
+                win::no_frame(h);
                 win::place_topmost(h, r);
                 // Win32 notify-icon rule: assert the foreground on the menu before it is used,
                 // so deactivation and focus behave like a native menu.

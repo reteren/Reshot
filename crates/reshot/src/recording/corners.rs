@@ -76,6 +76,8 @@ pub(super) fn prepare_visual_window(cx: &App, hwnd: HWND, rect: PxRect) {
                     | WS_EX_NOACTIVATE.0 as i32,
             );
         }
+        // No `win::no_frame` here: the system frame's thin outline and shadow around the
+        // recorded area are wanted.
         win::place_topmost(hwnd, rect);
         win::exclude_from_capture(hwnd, true);
     });
