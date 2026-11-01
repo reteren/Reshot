@@ -183,6 +183,38 @@ pub fn init(
             })
             .detach();
         }
+        // `--bench-mem` walks the steps of a screenshot session 5 s apart, logging each, so
+        // an outside sampler can tell which step leaves memory behind.
+        if has("--bench-mem") {
+            cx.spawn(async move |cx: &mut AsyncApp| {
+                let wait = || Duration::from_secs(5);
+                cx.background_executor().timer(wait()).await;
+                log::info!("Bench: step 1, capture only.");
+                let service = cx.update(|cx| cx.global::<ReshotApp>().capture.clone()).ok();
+                if let Some(service) = service {
+                    let frame = cx.background_executor().spawn(async move { service.snapshot_all_monitors() }).await;
+                    drop(frame);
+                }
+                cx.background_executor().timer(wait()).await;
+                log::info!("Bench: step 2, font catalogue.");
+                reshot_core::fonts::warmup();
+                cx.background_executor().timer(wait()).await;
+                for n in 3..6 {
+                    log::info!("Bench: step {n}, overlay open.");
+                    let _ = cx.update(|cx| capture(cx, "bench"));
+                    cx.background_executor().timer(wait()).await;
+                    log::info!("Bench: step {n}, overlay closed.");
+                    let _ = cx.update(|cx| {
+                        if let Some(h) = cx.global::<ReshotApp>().overlay {
+                            let _ = h.update(cx, |o, window, cx| o.bench_close(window, cx));
+                        }
+                    });
+                    cx.background_executor().timer(wait()).await;
+                }
+                log::info!("Bench: done.");
+            })
+            .detach();
+        }
         if has("--bench-audio") {
             cx.spawn(async move |cx: &mut AsyncApp| {
                 let _ = cx.update(crate::recording::toggle_audio_from_settings);
