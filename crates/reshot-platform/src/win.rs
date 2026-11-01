@@ -117,6 +117,7 @@ pub fn monitor_bounds(x: i32, y: i32) -> PxRect {
 /// the whole desktop shifting while the overlay is up. The window is placed once, the insets
 /// measured, and the window grown by them.
 pub fn place_topmost(hwnd: HWND, r: PxRect) {
+    no_frame(hwnd);
     // SAFETY: hwnd belongs to this process; the out-parameters are locals.
     unsafe {
         let _ = SetWindowPos(hwnd, Some(HWND_TOPMOST), r.left, r.top, r.width(), r.height(), SWP_SHOWWINDOW);
@@ -140,6 +141,37 @@ pub fn place_topmost(hwnd: HWND, r: PxRect) {
             r.width() + left + right,
             r.height() + top + bottom,
             SWP_SHOWWINDOW,
+        );
+    }
+}
+
+/// Stops DWM drawing a frame around a window: no 1 px border and no drop shadow.
+///
+/// Because gpui's borderless windows keep `WS_CAPTION`, Windows 11 gives them the frame of a
+/// normal window, drawn around the whole window rectangle. Over a transparent window (the
+/// radial menu is a circle in a square) that showed as a faint square outline with a shadow
+/// around nothing.
+pub fn no_frame(hwnd: HWND) {
+    use windows::Win32::Graphics::Dwm::{
+        DWMNCRP_DISABLED, DWMWA_BORDER_COLOR, DWMWA_NCRENDERING_POLICY, DwmSetWindowAttribute,
+    };
+    /// `DWMWA_COLOR_NONE`: no border at all (Windows 11).
+    const COLOR_NONE: u32 = 0xFFFF_FFFE;
+    let policy = DWMNCRP_DISABLED;
+    // SAFETY: hwnd belongs to this process; each value matches its attribute's type.
+    unsafe {
+        let _ = DwmSetWindowAttribute(
+            hwnd,
+            DWMWA_NCRENDERING_POLICY,
+            &policy as *const _ as *const core::ffi::c_void,
+            std::mem::size_of_val(&policy) as u32,
+        );
+        // Windows 10 has no such attribute; the policy above already removed its frame.
+        let _ = DwmSetWindowAttribute(
+            hwnd,
+            DWMWA_BORDER_COLOR,
+            &COLOR_NONE as *const _ as *const core::ffi::c_void,
+            std::mem::size_of_val(&COLOR_NONE) as u32,
         );
     }
 }

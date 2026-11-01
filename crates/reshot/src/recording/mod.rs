@@ -507,6 +507,13 @@ fn finish_audio(cx: &App, mut recorder: AudioRecorder) {
     }
 }
 
+/// Debug builds: the audio-track prompt with no recording behind it (`--preview-track-prompt`).
+/// Its id matches nothing pending, so closing it decides nothing.
+#[cfg(debug_assertions)]
+pub fn preview_track_prompt(cx: &mut App) {
+    let _ = TrackPrompt::open(u64::MAX, true, true, true, true, cx);
+}
+
 fn decide(id: u64, decision: Decision, cx: &mut App) {
     let Some(pending) = state(cx).pending.remove(&id) else {
         return;

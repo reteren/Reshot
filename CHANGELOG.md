@@ -8,11 +8,14 @@ project adheres to [Semantic Versioning](https://semver.org/).
 ### Changed
 
 - The tool settings strip's tooltip names its key: "Tool settings (Shift)".
+- Debug builds take `--preview-track-prompt` to open the Audio Tracks window on its own.
 
 ### Fixed
 
-- The Audio Tracks window after a recording is tall enough for its Save button, which was
-  cut off at the bottom.
+- The Audio Tracks window after a recording uses the settings dialog's font, caption,
+  close glyph, checkboxes and button, and its Save button is no longer cut off.
+- The radial menu and the other pop-ups no longer show a faint square outline and shadow
+  around them: Windows drew a normal window frame around the whole (transparent) window.
 
 ## [1.3.0] - Unreleased (test build)
 

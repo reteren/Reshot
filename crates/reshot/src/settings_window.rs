@@ -1,7 +1,7 @@
 //! Source VGUI settings dialog. A draft is applied only on OK or Apply.
 
 mod view;
-mod vgui;
+pub(crate) mod vgui;
 
 use crate::{app::ReshotApp, winutil};
 use gpui::{

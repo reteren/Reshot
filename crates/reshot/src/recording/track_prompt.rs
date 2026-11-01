@@ -3,17 +3,18 @@
 use gpui::{
     App, AppContext, Context, FocusHandle, Focusable, FontWeight, InteractiveElement, IntoElement,
     KeyDownEvent, ParentElement, Render, StatefulInteractiveElement, Styled, Window, WindowHandle,
-    div, px,
+    div, px, rgb, rgba, svg,
 };
 use reshot_platform::win::{self, PxRect};
 
+use crate::settings_window::vgui;
 use crate::{theme, winutil};
 
 const WIDTH: f32 = 300.0;
-/// Fits the content with room to spare: padding 32, title 24, question 37, three rows of the
-/// inherited 16 px text at gpui's 1.618 line height (26 each), separator 18 and the Save row
-/// 36 come to about 226. 202 cut the Save button off.
-const HEIGHT: f32 = 240.0;
+/// Padding 32, caption 16, question 15, the two track rows 38 (15 each, 8 apart), separator
+/// 2, "never" 15 and the Save button 24, with 12 between the six blocks: 202. A few spare
+/// pixels go above the button.
+const HEIGHT: f32 = 208.0;
 
 #[derive(Clone, Copy)]
 pub(super) struct Decision {
@@ -125,70 +126,85 @@ impl Focusable for TrackPrompt {
 }
 
 impl Render for TrackPrompt {
+    /// Built from the settings dialog's controls (`settings_window::vgui`), so the face, the
+    /// bold caption, the close glyph, the checkboxes and the button match it exactly.
     fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        let system = theme::check_row("keep-system", self.keep_system, "System audio")
-            .opacity(if self.has_system { 1.0 } else { 0.45 })
-            .on_click(cx.listener(|this, _, _, cx| {
+        let system = vgui::checkbox("keep-system", self.keep_system, "System audio", self.has_system).on_click(
+            cx.listener(|this, _, _, cx| {
                 if this.has_system {
                     this.keep_system = !this.keep_system;
                     cx.notify();
                 }
-            }));
-        let mic = theme::check_row("keep-mic", self.keep_mic, "Microphone")
-            .opacity(if self.has_mic { 1.0 } else { 0.45 })
-            .on_click(cx.listener(|this, _, _, cx| {
+            }),
+        );
+        let mic = vgui::checkbox("keep-mic", self.keep_mic, "Microphone", self.has_mic).on_click(cx.listener(
+            |this, _, _, cx| {
                 if this.has_mic {
                     this.keep_mic = !this.keep_mic;
                     cx.notify();
                 }
-            }));
-        let never = theme::check_row("never-ask", self.never_ask, "Never show this again")
-            .on_click(cx.listener(|this, _, _, cx| {
+            },
+        ));
+        let never = vgui::checkbox("never-ask", self.never_ask, "Never show this again", true).on_click(
+            cx.listener(|this, _, _, cx| {
                 this.never_ask = !this.never_ask;
                 cx.notify();
-            }));
-        theme::panel()
+            }),
+        );
+        div()
             .size_full()
+            .rounded(px(8.))
+            .bg(theme::dialog_bg())
             .p(px(16.))
+            .flex()
+            .flex_col()
+            .gap(px(12.))
+            .font_family(vgui::FONT)
+            .font_weight(FontWeight::THIN)
+            .text_size(px(12.))
+            .line_height(px(vgui::LINE))
+            .text_color(theme::text())
             .track_focus(&self.focus)
             .on_key_down(cx.listener(|this, event: &KeyDownEvent, window, cx| {
                 if event.keystroke.key == "escape" {
                     this.decide(window, cx);
                 }
             }))
-            .flex()
-            .flex_col()
             .child(
+                // The settings dialog's caption row, glyph for glyph.
                 div()
-                    .w_full()
+                    .h(px(16.))
                     .flex()
                     .items_center()
                     .justify_between()
-                    .child(theme::title("AUDIO TRACKS").text_size(px(12.)))
                     .child(
-                        theme::button("close-tracks", "✕")
-                            .w(px(24.))
+                        div()
+                            .flex_grow()
+                            .mt(px(2.))
+                            .text_size(px(10.))
+                            .line_height(px(12.5))
+                            .font_weight(FontWeight::BOLD)
+                            .child("AUDIO TRACKS"),
+                    )
+                    .child(
+                        div()
+                            .id("close-tracks")
+                            .size(px(16.))
+                            .flex_none()
+                            .cursor_pointer()
+                            .hover(|s| s.bg(rgba(0x00000026)))
+                            .child(svg().path("icons/dialog-close.svg").size(px(16.)).text_color(rgb(0xC1C1C1)))
                             .on_click(cx.listener(|this, _, window, cx| this.decide(window, cx))),
                     ),
             )
-            .child(
-                div()
-                    .mt(px(12.))
-                    .mb(px(6.))
-                    .font_family(theme::FONT)
-                    .text_size(px(12.))
-                    .font_weight(FontWeight::LIGHT)
-                    .child("Which audio do you want to keep?"),
-            )
-            .child(system)
-            .child(mic)
-            .child(theme::separator().mt(px(10.)).mb(px(6.)))
+            .child(vgui::text(12., vgui::LINE).child("Which audio do you want to keep?"))
+            .child(div().flex().flex_col().gap(px(8.)).child(system).child(mic))
+            .child(theme::separator())
             .child(never)
             .child(
                 // Pinned to the bottom: any spare height goes above it, not below.
-                div().w_full().flex().flex_1().items_end().justify_end().mt(px(12.)).child(
-                    theme::button("save-tracks", "Save")
-                        .min_w(px(68.))
+                div().flex_1().flex().items_end().justify_end().child(
+                    vgui::button("save-tracks", "Save", false, false)
                         .on_click(cx.listener(|this, _, window, cx| this.decide(window, cx))),
                 ),
             )

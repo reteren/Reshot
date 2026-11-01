@@ -140,6 +140,15 @@ pub fn init(
         })
         .detach();
     }
+    // Debug builds: `--preview-track-prompt` opens the audio-track prompt with no recording
+    // behind it, to look at; closing it decides nothing.
+    #[cfg(debug_assertions)]
+    if std::env::args().any(|a| a.eq_ignore_ascii_case("--preview-track-prompt")) {
+        cx.spawn(async move |cx: &mut AsyncApp| {
+            let _ = cx.update(crate::recording::preview_track_prompt);
+        })
+        .detach();
+    }
     if let Some(tab) = settings_now {
         cx.spawn(async move |cx: &mut AsyncApp| {
             let _ = cx.update(|cx| crate::settings_window::open_tab(cx, &tab));
