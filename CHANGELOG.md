@@ -3,6 +3,13 @@
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and this
 project adheres to [Semantic Versioning](https://semver.org/).
 
+## [1.3.5] - Unreleased
+
+### Changed
+
+- The installer looks like Reshot: dark grey pages, a title bar and border drawn in the same
+  style instead of the standard Windows frame, and wizard images made from the app's art.
+
 ## [1.3.4] - Unreleased (test build)
 
 ### Changed

@@ -60,7 +60,17 @@ OutputBaseFilename=reshot-{#AppVersion}-setup
 SetupIconFile=..\crates\reshot\assets\reshot.ico
 Compression=lzma2/max
 SolidCompression=yes
-WizardStyle=modern
+; Reshot's own look, kept light: Inno's built-in dark style on the grey of the app's panels,
+; with wizard images drawn from the app's art (build/installer-art/make-art.py makes them).
+; hidebevels drops the etched lines the app does not have; includetitlebar has the style draw
+; the title bar and border too, instead of the standard Windows frame. The images come in
+; several scales so the wizard picks a sharp one at any DPI.
+WizardStyle=modern dark hidebevels includetitlebar
+WizardBackColor=#4b4b4b
+WizardImageBackColor=#3a3a3a
+WizardSmallImageBackColor=#4b4b4b
+WizardImageFile=installer-art\side-100.png,installer-art\side-125.png,installer-art\side-150.png,installer-art\side-175.png,installer-art\side-200.png,installer-art\side-250.png
+WizardSmallImageFile=installer-art\small-100.png,installer-art\small-125.png,installer-art\small-150.png,installer-art\small-175.png,installer-art\small-200.png,installer-art\small-250.png
 LicenseFile=..\LICENSE
 InfoBeforeFile={#NoticeFile}
 
