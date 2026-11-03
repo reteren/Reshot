@@ -3,6 +3,14 @@
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and this
 project adheres to [Semantic Versioning](https://semver.org/).
 
+## [1.3.7] - Unreleased (test build)
+
+### Changed
+
+- The hex field in the colour panel is an ordinary text box: click to place the caret, drag,
+  `Shift` or a double click to select, and `Ctrl+A`, `Ctrl+C`, `Ctrl+X`, `Ctrl+V` to copy or
+  paste a code. A click no longer copies the colour on its own, as it did in 1.3.6.
+
 ## [1.3.6] - Unreleased (test build)
 
 ### Added
