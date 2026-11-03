@@ -1,161 +1,55 @@
-<div align="center">
-
-<img src="reshot.png" width="128" alt="Reshot">
+<p align="center">
+  <img src="reshot.png" width="128" alt="Reshot">
+</p>
 
 # Reshot
 
-**A resident screenshot and screen recording tool for Windows.**
+screenshot and screen recording tool for windows that sits in the tray and does nothing until you press the hotkey
 
-It lives in the tray and burns no cycles until you call it.
+press PrtScn and every monitor freezes in one frame. then you select any area, draw on it and send it to the clipboard or a file. hold the key instead and you get a radial menu with quick screen recording, an audio recorder and settings
 
-[![License: MIT](https://img.shields.io/badge/License-MIT-3C9898.svg)](LICENSE)
-[![Windows 10 2004+](https://img.shields.io/badge/Windows-10%202004%2B-3C9898.svg)](#requirements)
-[![Rust](https://img.shields.io/badge/Rust-1.90%2B-3C9898.svg)](https://www.rust-lang.org/)
+the whole interface is styled like half-life 2 / source vgui
 
-</div>
+what it can do:
 
----
+selection: rectangle, ellipse, triangle, lasso, polygon, several at once with ctrl, a selection inside another one cuts a hole in it
 
-## What it is
+drawing: brush, shapes, lines and arrows, text in any installed font, blur and pixelation, three erasers, eyedropper and a full colour picker, 32 steps of undo
 
-Press the hotkey and Reshot **freezes every monitor at once** in a single frame. Select an
-area of any shape, annotate it, and send it to the clipboard or to a file. Or record the
-selected area to video with sound.
+text: recognised words can be selected right over the frozen screen and copied. it works offline through the windows engine, and auto mode reads russian and english together
 
-The guiding rule is **zero background cost**. No timers, no polling, just a global hotkey
-waiting to fire. Idle, that means about 21 MB of memory and 0% CPU: even the UI framework
-is only started by the first press.
+recording: mp4 of any shape, system sound and mic go to separate tracks so you choose what to keep after you stop, sound from a single app, and a separate audio only recorder
 
-## Features
+everything outside a non rectangular selection stays transparent, in the clipboard too
 
-**Capture**
+## a few notes from the build side
 
-- Instant snapshot of every monitor at once, through DXGI Desktop Duplication, with
-  Windows.Graphics.Capture as the fallback
-- Shaped selections: rectangle, ellipse, triangle, lasso, polygon
-- Several selections at once (`Ctrl` + drag)
-- The pixel size of the selection is shown at its top-left corner while you size it
-- Anything outside a non-rectangular shape becomes transparent, clipboard included
+- in the tray it takes about 21 mb and 0% cpu. the ui isn't even loaded until the first press
+- screenshots go through desktop duplication, so the cursor doesn't blink when the screen freezes. windows.graphics.capture takes over where duplication fails, like exclusive fullscreen games
+- up to 1.2.4 it was c# and wpf, and the settings were a separate webview window. now it's all rust on gpui, one exe, no .net and no webview. old settings carry over
+- recording converts frames on the gpu and encodes with nvenc, amf or qsv if the card has them, libx264 if not
+- the overlay and the rec indicator are hidden from capture, so they never end up in your own video
+- the installer is around 48 mb because ffmpeg is inside. ffmpeg is gpl, reshot is mit, details in [THIRD-PARTY-NOTICES.md](THIRD-PARTY-NOTICES.md)
+- it can't come up over a program running as admin, windows doesn't let a normal process do that. for that there's a "start with windows as administrator" checkbox in settings
+- monitors with different dpi scaling aren't supported yet
+- sound from a single app needs windows 11, russian text recognition needs the russian ocr pack in windows language settings
 
-**Annotation**
+## install
 
-- Brush, shapes, lines and arrows, text
-- Blur and pixelation with adjustable strength
-- Three erasers: normal, absolute (down to transparency), and one for filters
-- Hardness on every tool but text: soft brushes, erasers, blur and pixelation edges
-- Eyedropper, full HSV picker, 16 swatches
-- 32 steps of undo
-- Every tool keeps its own size, opacity, hardness and colour
+grab `reshot-x.y.z-setup.exe` or the portable zip from [releases](https://github.com/reteren/reshot/releases). it installs per user, no admin rights needed. the build isn't signed so smartscreen will complain on first run, click more info and run anyway
 
-**Text from an image (OCR)**
+## license
 
-- Recognition through the built-in Windows engine: offline, no models, no network
-- Recognised words become selectable straight over the frame, so you drag and copy
-- AUTO mode runs the Russian and English engines and merges them line by line, because a
-  single Windows OCR engine mangles the other alphabet
+MIT, see [LICENSE](LICENSE)
 
-**Recording**
+## building
 
-- MP4 / H.264, encoded by the bundled ffmpeg with hardware acceleration (NVENC, AMF, QSV)
-  when available and libx264 otherwise
-- Records a selection of any shape, not just a rectangle
-- System audio and the microphone are captured **separately**, so the tracks are chosen
-  after the recording stops
-- Per-application sound through Windows Process Loopback
-- A standalone recorder for audio only
-
-**Shell**
-
-- Radial menu on holding the hotkey: it stays up after you let go, and a click runs a
-  slice. Optionally a pure gesture instead: point and release the key, no clicking
-- Half-Life 2 / Source VGUI styling
-- Settings, autostart, single instance
-
-## Install
-
-Prebuilt binaries live on the [Releases](https://github.com/reteren/reshot/releases) page.
-
-| File | What it is |
-|---|---|
-| `reshot-<version>-setup.exe` | Installer. Installs per user, no administrator rights |
-| `reshot-<version>-win-x64-portable.zip` | Portable build: unpack and run `reshot.exe` |
-
-One executable, nothing else to install: no runtime, no WebView2.
-
-The releases bundle a GPL build of ffmpeg (that is what records), which is what adds about
-145 MB to every artifact. Reshot itself stays MIT; the binary's licence and the source
-offer are in [THIRD-PARTY-NOTICES.md](THIRD-PARTY-NOTICES.md).
-
-> The application is not code signed, so SmartScreen may warn on first launch. That is
-> expected: "More info" then "Run anyway". You can verify the download against
-> `SHA256SUMS.txt` from the release.
-
-## Requirements
-
-- Windows 10 version 2004 (build 19041) or newer, x64
-- Windows 11 for per-application audio capture
-- A Windows OCR language pack for Russian text recognition
-  (Settings, Language, Russian, Optional features, Optical character recognition)
-- Monitors with different DPI scaling are not supported
-- **An application running as administrator cannot be captured over** unless Reshot is
-  elevated too. Windows forbids a normal program from taking the foreground away from an
-  elevated one, so the overlay cannot come up on top of it. Either run that application
-  without administrator rights, or turn on **Start with Windows → As administrator** in
-  the settings, which registers a scheduled task so Windows grants the rights once instead
-  of prompting at every logon
-
-## Usage
-
-The default hotkey is `PrtScn` (Print Screen) and can be rebound in the settings.
-
-| Action | What happens |
-|---|---|
-| Tap | The screen freezes and a capture session starts |
-| Hold | Radial menu: point at a slice and release the key to run it |
-| While recording | Stops the recording and saves the file |
-
-Tools are switched with the digits `1` to `0`, in toolbar order. The full list of shortcuts
-lives in the **Info** tab of the settings window, and it is kept in step with the code.
-
-## Building from source
-
-You need [Rust](https://rustup.rs/) 1.90 or newer (MSVC toolchain). Skia arrives prebuilt
-with `skia-safe`, so there is no LLVM or ninja to install.
+needs [rust](https://rustup.rs) 1.90+ with the msvc toolchain, on windows 10 (2004+) or 11
 
 ```powershell
-cargo test --workspace                    # run the tests
-cargo run -p reshot                       # run it (it lives in the tray)
-cargo run -p reshot -- --capture          # ... and start a capture right away
-cargo run -p reshot -- --settings=info    # ... or open the settings on a tab
+cargo run -p reshot                 # run it, it goes to the tray
+pwsh build/fetch-ffmpeg.ps1         # ffmpeg, needed for recording
+pwsh build/build-release.ps1        # installer and portable zip in dist/
 ```
 
-Recording needs `ffmpeg.exe`; `pwsh build/fetch-ffmpeg.ps1` downloads the pinned build.
-A debug build runs beside an installed Reshot without disturbing it; see
-[CONTRIBUTING.md](CONTRIBUTING.md).
-
-One script produces every release artifact (portable archive, installer, checksums). See
-[build/README.md](build/README.md):
-
-```powershell
-pwsh build/build-release.ps1
-```
-
-## Layout
-
-| Crate | Purpose |
-|---|---|
-| `crates/reshot` | The application on [gpui](https://crates.io/crates/gpui): tray menu, overlay, radial menu, recording HUD, settings |
-| `crates/reshot-core` | No windows: document model on Skia, undo, selections, settings, hotkeys, export |
-| `crates/reshot-capture` | Desktop Duplication snapshots, Windows.Graphics.Capture fallback and stream |
-| `crates/reshot-recording` | ffmpeg process, WASAPI and process loopback, separate PCM tracks, MP4/M4A |
-| `crates/reshot-ocr` | Windows.Media.Ocr and the AUTO (Russian + English) line merge |
-| `crates/reshot-platform` | Tray and hotkeys on their own thread, single instance, autostart, clipboard |
-
-Further reading: [ARCHITECTURE.md](ARCHITECTURE.md) for the stack and the reasoning behind
-it, [SPEC.md](SPEC.md) for the functional specification, [ROADMAP.md](ROADMAP.md) for the
-development plan, [docs/rust-rewrite.md](docs/rust-rewrite.md) for how the move from C# to
-Rust went.
-
-## License
-
-[MIT](LICENSE).
+more in [CONTRIBUTING.md](CONTRIBUTING.md) and [ARCHITECTURE.md](ARCHITECTURE.md)
