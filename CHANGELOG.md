@@ -3,6 +3,13 @@
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and this
 project adheres to [Semantic Versioning](https://semver.org/).
 
+## [1.3.6] - Unreleased (test build)
+
+### Added
+
+- A click on the hex field in the colour panel copies the colour to the clipboard, and so
+  does `Ctrl+C` while the field has the keys. The field still takes typing as before.
+
 ## [1.3.5] - Unreleased (test build)
 
 ### Changed
