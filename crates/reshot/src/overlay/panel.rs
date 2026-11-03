@@ -3,12 +3,12 @@
 //! and, except text, hardness; ink tools add the colour picker and the Text tool the font
 //! family.
 
-use std::cell::Cell;
+use std::cell::{Cell, RefCell};
 use std::rc::Rc;
 use std::time::{Duration, Instant};
 
 use gpui::{
-    AnyElement, Bounds, Context, Div, ElementId, InteractiveElement, IntoElement, KeyDownEvent, MouseButton,
+    AnyElement, App, Bounds, ClipboardItem, Context, Div, ElementId, InteractiveElement, IntoElement, KeyDownEvent, MouseButton,
     MouseDownEvent, MouseMoveEvent, ParentElement, Pixels, ScrollWheelEvent, SharedString, StatefulInteractiveElement,
     Styled, Window, canvas, div, linear_color_stop, linear_gradient, px, rgb, rgba, svg, uniform_list,
 };
@@ -43,6 +43,8 @@ enum Drag {
     Slider(Slider),
     Sv,
     Hue,
+    /// Selecting text in the hex field with the mouse.
+    HexText,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -58,7 +60,10 @@ pub struct PanelState {
     hue: f32,
     sat: f32,
     val: f32,
-    hex: String,
+    hex: LineEdit,
+    /// Where the hex text starts on screen and the x of every caret position in it, measured
+    /// while painting, so a click lands between the right two characters.
+    hex_layout: Rc<RefCell<(Pixels, Vec<Pixels>)>>,
     field: Option<Field>,
     font_open: bool,
     font_search: String,
@@ -74,13 +79,73 @@ impl Default for PanelState {
             hue: 0.0,
             sat: 0.0,
             val: 0.0,
-            hex: String::new(),
+            hex: LineEdit::default(),
+            hex_layout: Default::default(),
             field: None,
             font_open: false,
             font_search: String::new(),
             drag: None,
             bounds: Default::default(),
         }
+    }
+}
+
+/// A one-line text field with a caret and a selection, for the hex colour. Only printable
+/// ASCII goes in, so byte offsets are character offsets.
+#[derive(Default, Debug)]
+struct LineEdit {
+    text: String,
+    caret: usize,
+    anchor: usize,
+}
+
+impl LineEdit {
+    fn set(&mut self, text: String) {
+        self.caret = text.len();
+        self.anchor = self.caret;
+        self.text = text;
+    }
+
+    fn sel(&self) -> std::ops::Range<usize> {
+        self.caret.min(self.anchor)..self.caret.max(self.anchor)
+    }
+
+    fn selected(&self) -> &str {
+        &self.text[self.sel()]
+    }
+
+    fn select_all(&mut self) {
+        self.anchor = 0;
+        self.caret = self.text.len();
+    }
+
+    fn move_to(&mut self, i: usize, extend: bool) {
+        self.caret = i.min(self.text.len());
+        if !extend {
+            self.anchor = self.caret;
+        }
+    }
+
+    /// Types or pastes over the selection.
+    fn insert(&mut self, s: &str) {
+        let s: String = s.chars().filter(char::is_ascii_graphic).collect();
+        let r = self.sel();
+        self.text.replace_range(r.clone(), &s);
+        self.move_to(r.start + s.len(), false);
+    }
+
+    fn backspace(&mut self) {
+        if self.caret == self.anchor && self.caret > 0 {
+            self.anchor = self.caret - 1;
+        }
+        self.insert("");
+    }
+
+    fn delete(&mut self) {
+        if self.caret == self.anchor && self.caret < self.text.len() {
+            self.anchor = self.caret + 1;
+        }
+        self.insert("");
     }
 }
 
@@ -190,30 +255,26 @@ impl PanelState {
     /// Pulls the tool's colour into the picker.
     pub fn load(&mut self, s: &BrushSettings) {
         (self.hue, self.sat, self.val) = color_to_hsv(s.color);
-        self.hex = hex_of(s.color);
+        self.hex.set(hex_of(s.color));
     }
 
     pub fn set_color(&mut self, c: Color, editor: &mut Editor, tool: DrawTool) {
         let c = Color::from_rgb(c.r(), c.g(), c.b());
         editor.settings_mut(tool).color = c;
         (self.hue, self.sat, self.val) = color_to_hsv(c);
-        self.hex = hex_of(c);
+        self.hex.set(hex_of(c));
     }
 
     fn apply_hsv(&mut self, editor: &mut Editor, tool: DrawTool) {
         let c = hsv_to_color(self.hue, self.sat, self.val);
         editor.settings_mut(tool).color = c;
-        self.hex = hex_of(c);
+        self.hex.set(hex_of(c));
     }
 
     /// Typing into the hex field or the font search. Returns whether the key was consumed.
-    pub fn on_key(&mut self, e: &KeyDownEvent, editor: &mut Editor, tool: DrawTool) -> bool {
+    pub fn on_key(&mut self, e: &KeyDownEvent, editor: &mut Editor, tool: DrawTool, cx: &mut App) -> bool {
         let Some(field) = self.field else { return false };
         let k = &e.keystroke;
-        let text = match field {
-            Field::Hex => &mut self.hex,
-            Field::FontSearch => &mut self.font_search,
-        };
         match k.key.as_str() {
             "escape" => {
                 // Escape closes the dropdown or leaves the field, back to the overlay.
@@ -225,27 +286,84 @@ impl PanelState {
                 self.field = None;
                 return true;
             }
-            "backspace" => {
-                text.pop();
-            }
-            "c" if k.modifiers.control => {
-                let _ = reshot_platform::clipboard::set_text(text);
-                return true;
-            }
-            _ if k.modifiers.control => return true,
-            _ => match k.key_char.as_deref() {
-                Some(ch) if !ch.is_empty() && !ch.chars().any(char::is_control) => text.push_str(ch),
-                _ => return true,
-            },
+            _ => {}
         }
-        if field == Field::Hex
-            && let Some(c) = parse_hex(&self.hex)
+        let typed = k.key_char.as_deref().filter(|ch| !ch.is_empty() && !ch.chars().any(char::is_control));
+        if field == Field::FontSearch {
+            match k.key.as_str() {
+                "backspace" => {
+                    self.font_search.pop();
+                }
+                _ if k.modifiers.control => {}
+                _ => {
+                    if let Some(ch) = typed {
+                        self.font_search.push_str(ch);
+                    }
+                }
+            }
+            return true;
+        }
+
+        // The hex field edits like any text box: select with the mouse or Shift, copy, cut,
+        // paste or type over it.
+        let hex = &mut self.hex;
+        let shift = k.modifiers.shift;
+        let before = hex.text.clone();
+        match k.key.as_str() {
+            "a" if k.modifiers.control => hex.select_all(),
+            "c" | "x" if k.modifiers.control => {
+                if !hex.selected().is_empty() {
+                    cx.write_to_clipboard(ClipboardItem::new_string(hex.selected().to_string()));
+                    if k.key == "x" {
+                        hex.insert("");
+                    }
+                }
+            }
+            "v" if k.modifiers.control => {
+                if let Some(paste) = cx.read_from_clipboard().and_then(|item| item.text()) {
+                    hex.insert(paste.trim());
+                }
+            }
+            _ if k.modifiers.control => {}
+            "left" => {
+                let i = if !shift && hex.caret != hex.anchor { hex.sel().start } else { hex.caret.saturating_sub(1) };
+                hex.move_to(i, shift);
+            }
+            "right" => {
+                let i = if !shift && hex.caret != hex.anchor { hex.sel().end } else { hex.caret + 1 };
+                hex.move_to(i, shift);
+            }
+            "home" => hex.move_to(0, shift),
+            "end" => hex.move_to(hex.text.len(), shift),
+            "backspace" => hex.backspace(),
+            "delete" => hex.delete(),
+            _ => {
+                if let Some(ch) = typed {
+                    hex.insert(ch);
+                }
+            }
+        }
+        if hex.text != before
+            && let Some(c) = parse_hex(&hex.text)
         {
             // A partial hex while typing is ignored until it parses.
             editor.settings_mut(tool).color = c;
             (self.hue, self.sat, self.val) = color_to_hsv(c);
         }
         true
+    }
+
+    /// The caret position under a point, from the layout measured at the last paint.
+    fn hex_index_at(&self, p: gpui::Point<Pixels>) -> usize {
+        let layout = self.hex_layout.borrow();
+        let x = p.x - layout.0;
+        let nearest = layout
+            .1
+            .iter()
+            .enumerate()
+            .min_by(|a, b| (*a.1 - x).abs().partial_cmp(&(*b.1 - x).abs()).unwrap_or(std::cmp::Ordering::Equal))
+            .map(|(i, _)| i);
+        nearest.unwrap_or(self.hex.text.len()).min(self.hex.text.len())
     }
 
     fn slider_value(&self, s: Slider, b: &BrushSettings) -> (f32, f32, f32) {
@@ -321,6 +439,10 @@ impl Overlay {
                 self.panel.hue = fy * 360.0;
                 self.panel.apply_hsv(&mut self.editor, tool);
             }
+            Drag::HexText => {
+                let i = self.panel.hex_index_at(p);
+                self.panel.hex.move_to(i, true);
+            }
         }
     }
 
@@ -329,7 +451,11 @@ impl Overlay {
     pub(super) fn panel_drag_move(&mut self, e: &MouseMoveEvent, cx: &mut Context<Self>) -> bool {
         let Some(d) = self.panel.drag else { return false };
         self.panel_drag_to(d, e.position);
-        self.after_panel_edit(cx);
+        if d == Drag::HexText {
+            cx.notify();
+        } else {
+            self.after_panel_edit(cx);
+        }
         true
     }
 
@@ -498,6 +624,39 @@ impl Overlay {
             }));
         let hex_focused = self.panel.field == Some(Field::Hex);
         let (hw, hi) = theme::inset(theme::input_dark(), theme::input_light(), theme::input_bg());
+        let edit = &self.panel.hex;
+        let sel = edit.sel();
+        let run = |t: &str| div().child(t.to_string());
+        let mut line = div().relative().flex().items_center().h(px(13.));
+        if hex_focused && !sel.is_empty() {
+            line = line
+                .child(run(&edit.text[..sel.start]))
+                .child(run(&edit.text[sel.clone()]).bg(theme::accent_dim()))
+                .child(run(&edit.text[sel.end..]));
+        } else if hex_focused {
+            // The caret takes no width, so the text does not shift around it.
+            let caret = div().w(px(0.)).h_full().relative().child(div().absolute().w(px(1.)).h_full().bg(theme::text()));
+            line = line.child(run(&edit.text[..edit.caret])).child(caret).child(run(&edit.text[edit.caret..]));
+        } else {
+            line = line.child(run(&edit.text));
+        }
+        let layout = self.panel.hex_layout.clone();
+        let measured = edit.text.clone();
+        line = line.child(
+            canvas(
+                move |b, window, _| {
+                    let style = window.text_style();
+                    let size = style.font_size.to_pixels(window.rem_size());
+                    let runs = [style.to_run(measured.len())];
+                    let shaped = window.text_system().shape_line(measured.clone().into(), size, &runs, None);
+                    let xs = (0..=measured.len()).map(|i| shaped.x_for_index(i)).collect();
+                    *layout.borrow_mut() = (b.origin.x, xs);
+                },
+                |_, _, _, _| {},
+            )
+            .absolute()
+            .size_full(),
+        );
         let hex = hw.w(px(84.)).h(px(22.)).child(
             hi.id("hex")
                 .flex()
@@ -506,18 +665,21 @@ impl Overlay {
                 .text_size(px(11.))
                 .text_color(theme::text())
                 .cursor_text()
-                .child(self.panel.hex.clone())
-                .when_caret(hex_focused)
-                .tooltip(theme::tooltip("Click to copy the colour. Type to change it."))
+                .child(line)
                 .on_mouse_down(
                     MouseButton::Left,
-                    cx.listener(|this, _, _, cx| {
+                    cx.listener(|this, e: &MouseDownEvent, _, cx| {
                         cx.stop_propagation();
-                        // The click copies, and the field still takes the keys so the hex can be typed over.
-                        if let Err(e) = reshot_platform::clipboard::set_text(&this.panel.hex) {
-                            log::warn!("Hex copy failed: clipboard busy ({:?}).", e.holder);
-                        }
+                        let focused = this.panel.field == Some(Field::Hex);
                         this.panel.field = Some(Field::Hex);
+                        if e.click_count >= 2 {
+                            this.panel.hex.select_all();
+                        } else {
+                            let i = this.panel.hex_index_at(e.position);
+                            this.panel.hex.move_to(i, e.modifiers.shift && focused);
+                            // The drag that follows extends the selection, through the window-level listeners.
+                            this.panel.drag = Some(Drag::HexText);
+                        }
                         cx.notify();
                     }),
                 ),
@@ -874,6 +1036,27 @@ mod tests {
         assert_eq!(parse_hex("fff"), Some(Color::WHITE));
         assert_eq!(parse_hex("#12"), None);
         assert_eq!(hex_of(Color::from_rgb(1, 2, 3)), "#010203");
+    }
+
+    #[test]
+    fn hex_field_edits_like_a_text_box() {
+        let mut e = LineEdit::default();
+        e.set("#3C9898".into());
+        e.select_all();
+        assert_eq!(e.selected(), "#3C9898");
+        // Pasting over a selection replaces it, and spaces around a copied code are dropped.
+        e.insert(" #ff0000 ");
+        assert_eq!(e.text, "#ff0000");
+        assert_eq!(e.caret, 7);
+        e.move_to(1, false);
+        e.move_to(3, true);
+        assert_eq!(e.selected(), "ff");
+        e.backspace();
+        assert_eq!(e.text, "#0000");
+        e.backspace();
+        assert_eq!(e.text, "0000");
+        e.delete();
+        assert_eq!(e.text, "000");
     }
 
     #[test]

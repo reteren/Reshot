@@ -650,7 +650,7 @@ impl Overlay {
 
         // A focused text field in the panel owns its keys.
         if let Some(tool) = self.tool()
-            && self.panel.on_key(e, &mut self.editor, tool)
+            && self.panel.on_key(e, &mut self.editor, tool, cx)
         {
             self.after_panel_edit(cx);
             return;
