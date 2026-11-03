@@ -228,6 +228,10 @@ impl PanelState {
             "backspace" => {
                 text.pop();
             }
+            "c" if k.modifiers.control => {
+                let _ = reshot_platform::clipboard::set_text(text);
+                return true;
+            }
             _ if k.modifiers.control => return true,
             _ => match k.key_char.as_deref() {
                 Some(ch) if !ch.is_empty() && !ch.chars().any(char::is_control) => text.push_str(ch),
@@ -504,10 +508,15 @@ impl Overlay {
                 .cursor_text()
                 .child(self.panel.hex.clone())
                 .when_caret(hex_focused)
+                .tooltip(theme::tooltip("Click to copy the colour. Type to change it."))
                 .on_mouse_down(
                     MouseButton::Left,
                     cx.listener(|this, _, _, cx| {
                         cx.stop_propagation();
+                        // The click copies, and the field still takes the keys so the hex can be typed over.
+                        if let Err(e) = reshot_platform::clipboard::set_text(&this.panel.hex) {
+                            log::warn!("Hex copy failed: clipboard busy ({:?}).", e.holder);
+                        }
                         this.panel.field = Some(Field::Hex);
                         cx.notify();
                     }),
