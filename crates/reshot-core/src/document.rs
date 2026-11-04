@@ -1,7 +1,8 @@
 //! The editable state of a capture session (ARCHITECTURE §3). Layers, bottom to top:
 //!
 //! - **effects**: blur and pixelation over the untouched base, transparent where untouched;
-//! - **paint**: brush strokes plus baked shapes and text;
+//! - **paint**: brush strokes plus baked shapes;
+//! - **text**: movable annotations with erasure coverage in object coordinates;
 //! - **absolute mask**: coverage of the Absolute Eraser, punched out of the whole composite
 //!   (base included) on export.
 //!
@@ -14,6 +15,7 @@ use skia_safe::{
 };
 
 use crate::tools::VectorObject;
+use crate::text::TextAnnotation;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum Layer {
@@ -28,6 +30,7 @@ pub struct CaptureDocument {
     paint: Option<Bitmap>,
     effects: Option<Bitmap>,
     absolute: Option<Bitmap>,
+    pub(crate) texts: Vec<TextAnnotation>,
     pub has_paint: bool,
     pub has_effects: bool,
     pub has_absolute: bool,
@@ -71,6 +74,7 @@ impl CaptureDocument {
             paint: None,
             effects: None,
             absolute: None,
+            texts: Vec::new(),
             has_paint: false,
             has_effects: false,
             has_absolute: false,
@@ -86,7 +90,13 @@ impl CaptureDocument {
     }
 
     pub fn has_content(&self) -> bool {
-        self.has_paint || self.has_effects || self.has_absolute
+        self.has_paint || self.has_effects || self.has_absolute || !self.texts.is_empty()
+    }
+
+    pub fn texts(&self) -> &[TextAnnotation] { &self.texts }
+
+    pub fn draw_texts(&self, canvas: &Canvas) {
+        for text in &self.texts { text.draw(canvas); }
     }
 
     /// The layer's bitmap, allocated on first use.
@@ -226,6 +236,23 @@ impl CaptureDocument {
         selection: Option<&Path>,
     ) {
         self.apply_coverage(Layer::Paint, coverage, dx, dy, selection, BlendMode::DstOut);
+        if !self.texts.is_empty() {
+            // Clip once in world coordinates; store immutable coverage relative to each
+            // annotation so partially erased letters stay erased after a move or undo.
+            let mut clipped = new_bitmap(coverage.width(), coverage.height());
+            with_canvas(&mut clipped, |canvas| {
+                canvas.translate((-dx as f32, -dy as f32));
+                clip(canvas, selection);
+                canvas.draw_image(coverage.as_image(), (dx, dy), None);
+            });
+            let image = clipped.as_image();
+            let area = skia_safe::Rect::from_xywh(dx as f32, dy as f32, coverage.width() as f32, coverage.height() as f32);
+            for text in &mut self.texts {
+                if text.bounds().intersects(area) {
+                    text.erase(&image, (dx as f32, dy as f32).into());
+                }
+            }
+        }
     }
 
     /// Filter Eraser: removes effect pixels by the coverage strength.
@@ -285,7 +312,7 @@ impl CaptureDocument {
 
     // ---- Composition ------------------------------------------------------------------
 
-    /// Full export composite: base, effects, paint, then the Absolute Eraser punches the
+    /// Full export composite: base, effects, paint and text, then the Absolute Eraser punches the
     /// whole thing, base included, to transparency.
     pub fn render_composite(&self, base: &Bitmap) -> Bitmap {
         self.render_composite_region(base, IRect::from_wh(self.width, self.height))
@@ -310,18 +337,19 @@ impl CaptureDocument {
         out
     }
 
-    /// Effects and paint composited into one frame-sized bitmap, transparent where empty.
+    /// Effects, paint and text composited into one bitmap, transparent where empty.
     pub fn render_overlay(&self) -> Bitmap {
         let mut out = new_bitmap(self.width, self.height);
         with_canvas(&mut out, |c| self.draw_overlay(c));
         out
     }
 
-    /// Draws effects then paint onto `canvas` at the origin.
+    /// Draws effects, paint and text onto `canvas` at the origin.
     pub fn draw_overlay(&self, canvas: &Canvas) {
         for layer in [&self.effects, &self.paint].into_iter().flatten() {
             canvas.draw_image(layer.as_image(), (0, 0), None);
         }
+        self.draw_texts(canvas);
     }
 }
 

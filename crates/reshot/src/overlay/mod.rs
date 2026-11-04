@@ -17,6 +17,7 @@ mod panel;
 mod surface;
 mod toolbar;
 mod view;
+mod text_input;
 
 use std::sync::Arc;
 use std::time::Instant;
@@ -164,8 +165,19 @@ impl Overlay {
             win::unlock_input_from_game();
         }
 
+        let options = winutil::popup_options(winutil::logical(r, scale), true);
+        // Explicit dev previews are discoverable by Windows UI automation. Normal hotkey
+        // captures and release builds retain their popup semantics.
+        #[cfg(debug_assertions)]
+        let options = {
+            let mut options = options;
+            if std::env::args().any(|arg| arg == "--capture") {
+                options.kind = gpui::WindowKind::Normal;
+            }
+            options
+        };
         let handle = cx
-            .open_window(winutil::popup_options(winutil::logical(r, scale), true), move |window, cx| {
+            .open_window(options, move |window, cx| {
                 cx.new(|cx| {
                     let focus = cx.focus_handle();
                     window.focus(&focus);
@@ -432,7 +444,13 @@ impl Overlay {
             let clip = self.clip();
             self.with_live(cx, |this| match tool {
                 DrawTool::Brush => this.editor.begin_brush(p, clip),
-                DrawTool::Text => this.editor.begin_text(p, clip),
+                DrawTool::Text => {
+                    if e.click_count >= 2 && this.editor.edit_text_at(p) {
+                        this.panel.load(this.editor.settings(DrawTool::Text));
+                    } else if !this.editor.begin_text_drag(p) {
+                        this.editor.begin_text(p, clip);
+                    }
+                },
                 t if t.is_region() => this.editor.begin_region(t, p, e.modifiers.control, clip),
                 t => this.editor.begin_shape(t, p, clip),
             });
@@ -468,6 +486,8 @@ impl Overlay {
             return;
         }
 
+        if self.with_live(cx, |this| this.editor.begin_text_drag(p)) { return; }
+
         // Empty space: with Ctrl, keep the current selection as another region.
         self.sel.commit_active(e.modifiers.control);
         if self.shape == ShapeKind::Polygon {
@@ -494,6 +514,10 @@ impl Overlay {
 
     fn on_move(&mut self, e: &MouseMoveEvent, cx: &mut Context<Self>) {
         let p = self.to_frame(e.position);
+        if self.editor.is_dragging_text() {
+            self.with_live(cx, |this| this.editor.extend(p));
+            return;
+        }
         if self.ocr.active {
             if self.ocr.selecting {
                 self.ocr.extend_select(p);
@@ -656,12 +680,22 @@ impl Overlay {
             return;
         }
 
+        if ctrl && matches!(key, "z" | "y") {
+            if key == "y" || k.modifiers.shift { self.redo(cx); } else { self.undo(cx); }
+            return;
+        }
+
         // Typing: editing keys go to the text; Esc commits and keeps it.
         if self.editor.is_typing() {
             match key {
                 "escape" => self.with_live(cx, |this| this.editor.commit_text()),
                 "enter" => self.with_live(cx, |this| this.editor.type_newline()),
                 "backspace" => self.with_live(cx, |this| this.editor.backspace()),
+                "v" if ctrl => {
+                    if let Some(text) = cx.read_from_clipboard().and_then(|item| item.text()) {
+                        self.with_live(cx, |this| this.editor.replace_native_text(None, &text, false));
+                    }
+                }
                 _ if !ctrl => {
                     if let Some(ch) = k.key_char.clone().filter(|c| !c.is_empty()) {
                         self.with_live(cx, |this| this.editor.type_str(&ch));
@@ -669,6 +703,9 @@ impl Overlay {
                 }
                 _ => {}
             }
+            // Physical character keys were handled above. Suppress their WM_CHAR echo;
+            // native Unicode/IME packets bypass KeyDown and use EntityInputHandler instead.
+            cx.stop_propagation();
             return;
         }
 
@@ -690,6 +727,9 @@ impl Overlay {
         }
 
         match key {
+            "delete" | "backspace" if self.editor.selected_text_bounds().is_some() => {
+                self.with_live(cx, |this| { this.editor.delete_selected_text(); });
+            }
             "a" if ctrl => self.apply_ctrl_a(cx),
             "c" if ctrl && self.has_selection() => self.export(ExportKind::Copy, window, cx),
             "s" if ctrl && self.has_selection() => self.export(ExportKind::Save, window, cx),

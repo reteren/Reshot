@@ -69,7 +69,8 @@ An editing session is a `CaptureDocument`:
 CaptureDocument
 ├── base frame            the frozen capture of every monitor (immutable, held by the app)
 ├── EffectsLayer          blur and pixelation over the untouched base
-├── PaintLayer            brush strokes plus rasterised shapes and text
+├── PaintLayer            brush strokes plus rasterised shapes
+├── TextAnnotations       movable text, with erasure coverage in object coordinates
 └── AbsoluteMask          coverage of the Absolute Eraser, punched out on export
 ```
 
@@ -81,11 +82,12 @@ Why it is split this way:
 - **The Absolute Eraser erases everything down to transparency**, which is an alpha mask
   applied to the final composite.
 
-Shapes and text are **baked into PaintLayer on commit**, so the eraser treats them exactly
-like brush strokes, pixel by pixel. An earlier design kept a movable vector layer; it was
-dropped because "erase part of an arrow" is worth more than "move an arrow afterwards".
+Shapes are **baked into PaintLayer on commit**. Text remains an annotation above raster ink,
+so moving or editing it does not overwrite drawings underneath. Immutable erasure masks are
+stored relative to each text block and move with it. Raster eraser commands snapshot both
+the affected raster pixels and text state; a text drag records one command on release.
 
-Export composition: base, then effects, then paint, cropped to the union of the selection
+Export composition: base, then effects, paint and text, cropped to the union of the selection
 paths, with everything outside those paths transparent.
 
 ### Fonts

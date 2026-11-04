@@ -62,7 +62,7 @@ pub enum VectorKind {
 
 /// A shape or text block while it is being drawn. Shapes are defined by a bounding rect
 /// (circle, square, triangle) or two endpoints (line, arrow); text by its top-left and string.
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq)]
 pub struct VectorObject {
     pub kind: VectorKind,
     pub bounds: Rect,

@@ -3,6 +3,7 @@
 //! overlay feeds it points in frame pixels and draws what it reports.
 
 use std::collections::HashMap;
+use std::ops::Range;
 
 use skia_safe::{
     Bitmap, BlendMode, Color, FilterMode, IRect, Image, MipmapMode, Paint, Path, Point, Rect, SamplingOptions,
@@ -10,7 +11,8 @@ use skia_safe::{
 };
 
 use crate::document::{self, CaptureDocument, Layer};
-use crate::history::{LayerRegionCommand, UndoHistory};
+use crate::history::{LayerRegionCommand, TextCommand, UndoHistory};
+use crate::text::TextAnnotation;
 use crate::soft::SoftStroke;
 use crate::tools::{BrushSettings, VectorKind, VectorObject};
 
@@ -169,6 +171,18 @@ struct RegionGesture {
     frame: Option<(u64, Option<Path>, Option<PlacedCoverage>)>,
 }
 
+struct TextDrag {
+    id: u64,
+    pointer: Point,
+    origin: Point,
+    before: Vec<TextAnnotation>,
+}
+
+struct TextEdit {
+    index: usize,
+    before: Vec<TextAnnotation>,
+}
+
 pub struct Editor {
     doc: CaptureDocument,
     base: Bitmap,
@@ -176,13 +190,20 @@ pub struct Editor {
     pub tool_settings: HashMap<ToolKey, BrushSettings>,
     blur_cache: Option<(f32, Bitmap, Image)>,
     pixel_cache: Option<(i32, Bitmap, Image)>,
-    /// The layers as images, at `revision`. A mutable bitmap's `as_image` copies all of it,
+    /// The layers as images, at `raster_revision`. Moving text does not invalidate them.
+    /// A mutable bitmap's `as_image` copies all of it,
     /// and the overlay paints tile by tile: per tile, per frame, that was 25 MB per layer.
     layer_images: (u64, [Option<Image>; 3]),
+    raster_revision: u64,
     shape: Option<(VectorObject, Point)>,
     shape_clip: Option<Path>,
     text: Option<VectorObject>,
     text_clip: Option<Path>,
+    text_marked: Option<Range<usize>>,
+    text_edit: Option<TextEdit>,
+    text_drag: Option<TextDrag>,
+    selected_text: Option<u64>,
+    next_text_id: u64,
     region: Option<RegionGesture>,
     /// Union of everything ever drawn, so the overlay can bound its repaint.
     pub content_bounds: Option<IRect>,
@@ -205,10 +226,16 @@ impl Editor {
             blur_cache: None,
             pixel_cache: None,
             layer_images: (u64::MAX, [None, None, None]),
+            raster_revision: 0,
             shape: None,
             shape_clip: None,
             text: None,
             text_clip: None,
+            text_marked: None,
+            text_edit: None,
+            text_drag: None,
+            selected_text: None,
+            next_text_id: 0,
             region: None,
             content_bounds: None,
             absolute_bounds: None,
@@ -279,24 +306,29 @@ impl Editor {
     ) {
         let cmd = LayerRegionCommand::record(&mut self.doc, layer, region, op);
         self.history.push(cmd);
+        self.raster_revision += 1;
         self.touched(region);
     }
 
     // ---- Undo ----------------------------------------------------------------------
 
     pub fn undo(&mut self) -> bool {
+        self.commit_text();
         self.finish_gesture();
         let ok = self.history.undo(&mut self.doc);
         if ok {
+            self.raster_revision += 1;
             self.touched(IRect::from_wh(self.width(), self.height()));
         }
         ok
     }
 
     pub fn redo(&mut self) -> bool {
+        self.commit_text();
         self.finish_gesture();
         let ok = self.history.redo(&mut self.doc);
         if ok {
+            self.raster_revision += 1;
             self.touched(IRect::from_wh(self.width(), self.height()));
         }
         ok
@@ -309,6 +341,21 @@ impl Editor {
     }
 
     pub fn extend(&mut self, p: Point) {
+        if let Some(drag) = &self.text_drag {
+            let (id, origin, pointer) = (drag.id, drag.origin, drag.pointer);
+            let size = (self.width() as f32, self.height() as f32);
+            if let Some(text) = self.doc.texts.iter_mut().find(|text| text.id == id) {
+                let bounds = text.bounds();
+                let mut area = Rect::from_wh(size.0, size.1);
+                if let Some(clip) = &text.clip { area.intersect(clip.bounds()); }
+                let x = (origin.x + p.x - pointer.x).clamp(area.left, (area.right - bounds.width()).max(area.left));
+                let y = (origin.y + p.y - pointer.y).clamp(area.top, (area.bottom - bounds.height()).max(area.top));
+                text.object.p1 = Point::new(x, y);
+                let dirty = Rect::join2(bounds, text.bounds());
+                if let Some(region) = self.to_region(dirty.with_outset((3.0, 3.0))) { self.touched(region); }
+            }
+            return;
+        }
         if let Some((v, start)) = &mut self.shape {
             update_shape(v, *start, p);
         }
@@ -361,7 +408,7 @@ impl Editor {
         }
     }
 
-    /// Bakes a shape or text block into the paint layer, clipped to the selection, with a
+    /// Bakes a shape into the paint layer, clipped to the selection, with a
     /// region-snapshot undo. Once baked it is ordinary ink.
     fn commit_vector(&mut self, v: &VectorObject, clip: Option<&Path>) {
         let pad = v.padding();
@@ -379,6 +426,8 @@ impl Editor {
 
     pub fn begin_text(&mut self, p: Point, clip: Option<Path>) {
         self.commit_text();
+        self.text_marked = None;
+        self.selected_text = None;
         let s = self.settings(DrawTool::Text);
         let mut t = VectorObject {
             kind: VectorKind::Text,
@@ -400,8 +449,96 @@ impl Editor {
         self.text.as_ref()
     }
 
+    pub fn hit_text(&self, point: Point) -> Option<u64> {
+        self.doc.texts.iter().rev().find(|text| text.contains(point)).map(|text| text.id)
+    }
+
+    pub fn selected_text_bounds(&self) -> Option<Rect> {
+        if let Some(text) = &self.text { return Some(text.compute_bounds()); }
+        self.doc.texts.iter().find(|text| Some(text.id) == self.selected_text).map(|text| text.bounds())
+    }
+
+    pub fn begin_text_drag(&mut self, point: Point) -> bool {
+        self.commit_text();
+        self.end_text_drag();
+        let Some(id) = self.hit_text(point) else { self.selected_text = None; return false };
+        let origin = self.doc.texts.iter().find(|text| text.id == id).unwrap().object.p1;
+        self.selected_text = Some(id);
+        self.text_drag = Some(TextDrag { id, pointer: point, origin, before: self.doc.texts.clone() });
+        true
+    }
+
+    pub fn is_dragging_text(&self) -> bool { self.text_drag.is_some() }
+
+    fn end_text_drag(&mut self) {
+        if let Some(drag) = self.text_drag.take()
+            && self.doc.texts.iter().any(|text| text.id == drag.id && text.object.p1 != drag.origin)
+        {
+            self.history.push(TextCommand { before: drag.before, after: self.doc.texts.clone() });
+        }
+    }
+
+    /// A double click reopens the retained annotation instead of placing another on top.
+    pub fn edit_text_at(&mut self, point: Point) -> bool {
+        self.commit_text();
+        let Some(id) = self.hit_text(point) else { return false };
+        let index = self.doc.texts.iter().position(|text| text.id == id).unwrap();
+        let before = self.doc.texts.clone();
+        let text = self.doc.texts.remove(index);
+        self.selected_text = Some(id);
+        self.text_clip = text.clip;
+        let settings = self.settings_mut(DrawTool::Text);
+        settings.color = text.object.color;
+        settings.opacity = text.object.opacity;
+        settings.thickness = text.object.font_size / 5.0;
+        settings.font_family = text.object.font_family.clone();
+        self.text = Some(text.object);
+        self.text_edit = Some(TextEdit { index, before });
+        if let Some(region) = self.live_bounds() { self.touched(region); }
+        true
+    }
+
+    pub fn delete_selected_text(&mut self) -> bool {
+        self.commit_text();
+        let Some(id) = self.selected_text.take() else { return false };
+        let Some(index) = self.doc.texts.iter().position(|text| text.id == id) else { return false };
+        let before = self.doc.texts.clone();
+        let bounds = self.doc.texts.remove(index).bounds();
+        self.history.push(TextCommand { before, after: self.doc.texts.clone() });
+        if let Some(region) = self.to_region(bounds.with_outset((3.0, 3.0))) { self.touched(region); }
+        true
+    }
+
     pub fn is_typing(&self) -> bool {
         self.text.is_some()
+    }
+
+    pub fn marked_text_range(&self) -> Option<Range<usize>> { self.text_marked.clone() }
+    pub fn unmark_text(&mut self) { self.text_marked = None; }
+
+    pub fn text_for_range_utf16(&self, range: Range<usize>) -> Option<(String, Range<usize>)> {
+        let text = &self.text.as_ref()?.text;
+        let bytes = utf16_byte_range(text, range);
+        let start = text[..bytes.start].encode_utf16().count();
+        let end = start + text[bytes.clone()].encode_utf16().count();
+        Some((text[bytes].to_owned(), start..end))
+    }
+
+    /// Native Windows text input (including VK_PACKET and IME) uses UTF-16 offsets and
+    /// replaces composition text rather than appending each intermediate candidate.
+    pub fn replace_native_text(&mut self, range: Option<Range<usize>>, value: &str, marked: bool) {
+        let previous_mark = self.text_marked.take();
+        let Some(text) = self.text.as_mut() else { return };
+        let end = text.text.encode_utf16().count();
+        let range = range.or(previous_mark).unwrap_or(end..end);
+        let bytes = utf16_byte_range(&text.text, range);
+        let start = text.text[..bytes.start].encode_utf16().count();
+        let value: String = value.replace("\r\n", "\n").replace('\r', "\n")
+            .chars().filter(|c| !c.is_control() || *c == '\n').collect();
+        text.text.replace_range(bytes, &value);
+        if marked && !value.is_empty() {
+            self.text_marked = Some(start..start + value.encode_utf16().count());
+        }
     }
 
     pub fn type_str(&mut self, s: &str) {
@@ -433,13 +570,34 @@ impl Editor {
         }
     }
 
-    /// Esc, click-away or tool switch: keeps what was typed.
+    /// Esc, click-away or tool switch keeps text as a movable annotation.
     pub fn commit_text(&mut self) {
+        self.text_marked = None;
         let Some(t) = self.text.take() else { return };
         let clip = self.text_clip.take();
-        if !t.text.is_empty() {
-            self.commit_vector(&t, clip.as_ref());
+        let bounds = t.compute_bounds();
+        let before;
+        if let Some(edit) = self.text_edit.take() {
+            before = edit.before;
+            let original = &before[edit.index];
+            self.doc.texts = before.clone();
+            if t == original.object {
+                if let Some(region) = self.to_region(bounds.with_outset((3.0, 3.0))) { self.touched(region); }
+                return;
+            }
+            if t.text.is_empty() { self.doc.texts.remove(edit.index); }
+            else { self.doc.texts[edit.index] = TextAnnotation::new(original.id, t, clip); }
+        } else {
+            if t.text.is_empty() { return; }
+            before = self.doc.texts.clone();
+            let id = self.next_text_id;
+            self.next_text_id += 1;
+            self.selected_text = Some(id);
+            self.doc.texts.push(TextAnnotation::new(id, t, clip));
         }
+        self.doc.has_paint = true;
+        self.history.push(TextCommand { before, after: self.doc.texts.clone() });
+        if let Some(region) = self.to_region(bounds.with_outset((3.0, 3.0))) { self.touched(region); }
     }
 
     // ---- Effects and erasers --------------------------------------------------------------
@@ -502,10 +660,10 @@ impl Editor {
 
     /// The document layers as images, rebuilt only after the document changed.
     fn layer_images(&mut self) -> [Option<Image>; 3] {
-        if self.layer_images.0 != self.revision {
+        if self.layer_images.0 != self.raster_revision {
             let image = |l| self.doc.layer(l).map(Bitmap::as_image);
             let images = [image(Layer::Paint), image(Layer::Effects), image(Layer::Absolute)];
-            self.layer_images = (self.revision, images);
+            self.layer_images = (self.raster_revision, images);
         }
         self.layer_images.1.clone()
     }
@@ -619,9 +777,9 @@ impl Editor {
                     d.erase_effects_coverage(&cov, region.left, region.top, clip.as_ref())
                 });
             }
-            DrawTool::Eraser if self.doc.has_paint => {
-                // Shapes and text are baked into paint, so this erases them by touch; the
-                // effects layer is the Filter Eraser's job and is left alone.
+            DrawTool::Eraser if self.doc.has_paint || !self.doc.texts.is_empty() => {
+                // Raster ink and text erasure masks share one undo step. Effects are the
+                // Filter Eraser's job and are left alone.
                 let cov = self.stroke_coverage(&r, region);
                 self.apply_region_op(Layer::Paint, region, |d| {
                     d.erase_paint_coverage(&cov, region.left, region.top, clip.as_ref())
@@ -696,6 +854,7 @@ impl Editor {
             // The caret sits past the end of the last line, a font size tall.
             add(t.compute_bounds(), t.font_size);
         }
+        if self.text_drag.is_some() && let Some(bounds) = self.selected_text_bounds() { add(bounds, 3.0); }
         out.and_then(|r| self.to_region(r))
     }
 
@@ -782,6 +941,20 @@ impl Editor {
         if let Some(v) = self.shape_preview() {
             v.draw(canvas);
         }
+        if !self.doc.texts.is_empty() {
+            canvas.save_layer(&skia_safe::canvas::SaveLayerRec::default());
+            self.doc.draw_texts(canvas);
+            if tool == Some(DrawTool::Eraser) && let Some((region, coverage)) = &live_cov {
+                canvas.save();
+                if let Some(clip) = &clip { canvas.clip_path(clip, None, true); }
+                let mut paint = Paint::default();
+                paint.set_blend_mode(BlendMode::DstOut);
+                paint.set_color_filter(document::coverage_alpha_filter());
+                canvas.draw_image(coverage, (region.left, region.top), Some(&paint));
+                canvas.restore();
+            }
+            canvas.restore();
+        }
         if let Some(t) = &self.text {
             t.draw(canvas);
             draw_caret(canvas, t);
@@ -827,11 +1000,12 @@ impl Editor {
     // ---- Gesture plumbing -------------------------------------------------------------------
 
     pub fn is_drawing(&self) -> bool {
-        self.shape.is_some() || self.region.is_some()
+        self.shape.is_some() || self.region.is_some() || self.text_drag.is_some()
     }
 
     /// Mouse up: commits whatever gesture is live.
     pub fn end_gesture(&mut self) {
+        self.end_text_drag();
         self.end_shape();
         self.end_region();
     }
@@ -857,6 +1031,19 @@ impl Editor {
         let b = document::pixels(&px);
         Color::from_rgb(b[2], b[1], b[0])
     }
+}
+
+fn utf16_byte_range(text: &str, range: Range<usize>) -> Range<usize> {
+    let mut units = 0;
+    let mut start = text.len();
+    let mut end = text.len();
+    for (byte, character) in text.char_indices() {
+        let next = units + character.len_utf16();
+        if range.start < next && start == text.len() { start = byte; }
+        if range.end <= units { end = byte; break; }
+        units = next;
+    }
+    start.min(end)..end
 }
 
 /// A caret at the end of the text being typed, measured with the same typeface the glyphs
@@ -976,7 +1163,7 @@ mod tests {
     }
 
     #[test]
-    fn typed_text_bakes_on_commit() {
+    fn typed_text_is_retained_on_commit() {
         let mut e = editor();
         e.begin_text(Point::new(5.0, 40.0), None);
         e.type_str("Hi\u{8}");
@@ -987,6 +1174,156 @@ mod tests {
         e.commit_text();
         assert!(e.document().has_paint);
         assert!(!e.is_typing());
+        assert_eq!(e.document().texts().len(), 1);
+    }
+
+    #[test]
+    fn text_drag_keeps_grab_offset_and_is_one_undo_step() {
+        let mut e = editor();
+        e.begin_text(Point::new(10.0, 35.0), None);
+        e.type_str("Hi");
+        e.commit_text();
+        let initial = e.document().texts()[0].object.p1;
+        let grab = Point::new(initial.x + 3.0, initial.y + 4.0);
+        assert!(e.begin_text_drag(grab));
+        e.extend(Point::new(grab.x + 10.0, grab.y + 7.0));
+        e.extend(Point::new(grab.x + 25.0, grab.y + 12.0));
+        e.end_gesture();
+        let moved = Point::new(initial.x + 25.0, initial.y + 12.0);
+        assert_eq!(e.document().texts()[0].object.p1, moved);
+        assert!(e.undo());
+        assert_eq!(e.document().texts()[0].object.p1, initial);
+        assert!(e.undo());
+        assert!(e.document().texts().is_empty());
+        assert!(e.redo());
+        assert!(e.redo());
+        assert_eq!(e.document().texts()[0].object.p1, moved);
+    }
+
+    #[test]
+    fn moving_text_preserves_underlying_ink_and_export_matches_preview() {
+        let mut e = editor();
+        e.begin_brush(Point::new(0.0, 50.0), None);
+        e.extend(Point::new(100.0, 50.0));
+        e.end_gesture();
+        let ink = document::pixels(e.document().layer(Layer::Paint).unwrap()).to_vec();
+        e.begin_text(Point::new(10.0, 35.0), None);
+        e.type_str("Hi");
+        e.commit_text();
+        let start = e.document().texts()[0].object.p1;
+        assert!(e.begin_text_drag(Point::new(start.x + 2.0, start.y + 2.0)));
+        e.extend(Point::new(start.x + 32.0, start.y + 22.0));
+        e.end_gesture();
+        assert_eq!(document::pixels(e.document().layer(Layer::Paint).unwrap()), ink);
+        // A bitmap clone shares pixels: allocate a separate composition target instead.
+        let mut preview = document::new_bitmap(e.width(), e.height());
+        let base = e.base().as_image();
+        document::with_canvas(&mut preview, |canvas| {
+            canvas.draw_image(&base, (0, 0), None);
+            e.paint(canvas);
+        });
+        let exported = e.document().render_composite(e.base());
+        assert_eq!(document::pixels(&preview), document::pixels(&exported));
+    }
+
+    #[test]
+    fn erased_text_stays_erased_after_a_move_and_undo_restores_it() {
+        let mut e = editor();
+        e.begin_text(Point::new(10.0, 35.0), None);
+        e.type_str("Hi");
+        e.commit_text();
+        e.settings_mut(DrawTool::Eraser).opacity = 1.0;
+        e.begin_region(DrawTool::Eraser, Point::new(0.0, 0.0), true, None);
+        e.extend(Point::new(100.0, 100.0));
+        e.end_gesture();
+        let all_transparent = |e: &Editor| document::pixels(&e.document().render_overlay()).chunks_exact(4).all(|p| p[3] == 0);
+        assert!(all_transparent(&e));
+        let start = e.document().texts()[0].object.p1;
+        assert!(e.begin_text_drag(Point::new(start.x + 2.0, start.y + 2.0)));
+        e.extend(Point::new(start.x + 22.0, start.y + 12.0));
+        e.end_gesture();
+        assert!(all_transparent(&e));
+        assert!(e.undo());
+        assert!(all_transparent(&e));
+        assert!(e.undo());
+        assert!(!all_transparent(&e));
+    }
+
+    #[test]
+    fn double_click_edit_reuses_the_object_and_undo_restores_the_old_text() {
+        let mut e = editor();
+        e.begin_text(Point::new(10.0, 35.0), None);
+        e.type_str("Hi");
+        e.commit_text();
+        let start = e.document().texts()[0].object.p1;
+        let id = e.document().texts()[0].id;
+        assert!(e.edit_text_at(Point::new(start.x + 2.0, start.y + 2.0)));
+        e.type_str("!");
+        e.commit_text();
+        assert_eq!(e.document().texts().len(), 1);
+        assert_eq!(e.document().texts()[0].id, id);
+        assert_eq!(e.document().texts()[0].object.text, "Hi!");
+        assert!(e.undo());
+        assert_eq!(e.document().texts()[0].object.text, "Hi");
+    }
+
+    #[test]
+    fn partial_text_erasure_moves_with_the_glyphs() {
+        let mut e = editor();
+        e.begin_text(Point::new(10.0, 35.0), None);
+        e.type_str("Hi");
+        e.commit_text();
+        let original = e.document().render_overlay();
+        e.begin_region(DrawTool::Eraser, Point::new(0.0, 0.0), true, None);
+        e.extend(Point::new(20.0, 100.0));
+        e.end_gesture();
+        let erased = e.document().render_overlay();
+        assert_ne!(document::pixels(&original), document::pixels(&erased));
+        assert!(document::pixels(&erased).chunks_exact(4).any(|p| p[3] != 0));
+        let start = e.document().texts()[0].object.p1;
+        assert!(e.begin_text_drag(Point::new(start.x + 2.0, start.y + 2.0)));
+        e.extend(Point::new(start.x + 32.0, start.y + 2.0));
+        e.end_gesture();
+        let moved = e.document().render_overlay();
+        for y in 0..100usize {
+            for x in 0..70usize {
+                let before = y * erased.row_bytes() + x * 4;
+                let after = y * moved.row_bytes() + (x + 30) * 4;
+                assert_eq!(&document::pixels(&erased)[before..before + 4], &document::pixels(&moved)[after..after + 4]);
+            }
+        }
+    }
+
+    #[test]
+    fn clicking_text_without_moving_does_not_add_an_undo_step() {
+        let mut e = editor();
+        e.begin_text(Point::new(10.0, 35.0), None);
+        e.type_str("Hi");
+        e.commit_text();
+        let p = e.document().texts()[0].object.p1;
+        assert!(e.begin_text_drag(Point::new(p.x + 2.0, p.y + 2.0)));
+        e.end_gesture();
+        assert!(e.undo());
+        assert!(e.document().texts().is_empty());
+    }
+
+    #[test]
+    fn native_input_handles_surrogate_pairs_and_replaces_ime_composition() {
+        let mut e = editor();
+        e.begin_text(Point::new(10.0, 35.0), None);
+        e.replace_native_text(None, "A😀B", false);
+        let (emoji, actual) = e.text_for_range_utf16(2..3).unwrap();
+        assert_eq!(emoji, "😀");
+        assert_eq!(actual, 1..3);
+        e.replace_native_text(Some(1..3), "Ж", false);
+        assert_eq!(e.text_editing().unwrap().text, "AЖB");
+        e.replace_native_text(None, "漢", true);
+        e.replace_native_text(None, "漢字", true);
+        e.replace_native_text(None, "漢字", false);
+        assert_eq!(e.text_editing().unwrap().text, "AЖB漢字");
+        assert!(e.marked_text_range().is_none());
+        e.replace_native_text(None, "\r\nnext", false);
+        assert_eq!(e.text_editing().unwrap().text, "AЖB漢字\nnext");
     }
 
     #[test]

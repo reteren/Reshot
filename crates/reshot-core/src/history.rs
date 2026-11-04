@@ -8,6 +8,18 @@ use skia_safe::{Bitmap, IRect};
 use std::collections::VecDeque;
 
 use crate::document::{self, CaptureDocument, Layer};
+use crate::text::TextAnnotation;
+
+/// One text creation, edit, deletion or complete pointer drag is one undo step.
+pub(crate) struct TextCommand {
+    pub before: Vec<TextAnnotation>,
+    pub after: Vec<TextAnnotation>,
+}
+
+impl<Ctx: HasDocument + ?Sized> UndoableCommand<Ctx> for TextCommand {
+    fn undo(&mut self, ctx: &mut Ctx) { ctx.document_mut().texts = self.before.clone(); }
+    fn redo(&mut self, ctx: &mut Ctx) { ctx.document_mut().texts = self.after.clone(); }
+}
 
 pub const MAX_DEPTH: usize = 32;
 
@@ -123,6 +135,7 @@ pub struct LayerRegionCommand {
     origin_y: i32,
     payload: Payload,
     bytes: usize,
+    texts: Option<TextCommand>,
 }
 
 // SAFETY: skia Bitmaps own their pixel memory and are only touched from the thread that holds
@@ -158,6 +171,7 @@ impl LayerRegionCommand {
             origin_y,
             payload,
             bytes,
+            texts: None,
         }
     }
 
@@ -168,10 +182,13 @@ impl LayerRegionCommand {
         region: IRect,
         edit: impl FnOnce(&mut CaptureDocument),
     ) -> Self {
+        let texts_before = (layer == Layer::Paint && !doc.texts.is_empty()).then(|| doc.texts.clone());
         let before = document::snapshot_region(doc.layer_mut(layer), region);
         edit(doc);
         let after = document::snapshot_region(doc.layer_mut(layer), region);
-        Self::new(doc, layer, region, before, after)
+        let mut command = Self::new(doc, layer, region, before, after);
+        command.texts = texts_before.map(|before| TextCommand { before, after: doc.texts.clone() });
+        command
     }
 
     fn apply(&self, doc: &mut CaptureDocument, use_before: bool) {
@@ -200,10 +217,12 @@ impl LayerRegionCommand {
 impl<Ctx: HasDocument + ?Sized> UndoableCommand<Ctx> for LayerRegionCommand {
     fn undo(&mut self, ctx: &mut Ctx) {
         self.apply(ctx.document_mut(), true);
+        if let Some(texts) = &mut self.texts { texts.undo(ctx); }
     }
 
     fn redo(&mut self, ctx: &mut Ctx) {
         self.apply(ctx.document_mut(), false);
+        if let Some(texts) = &mut self.texts { texts.redo(ctx); }
     }
 
     fn retained_bytes(&self) -> usize {

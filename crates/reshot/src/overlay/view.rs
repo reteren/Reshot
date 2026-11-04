@@ -3,7 +3,7 @@
 //! the dim while re-selecting), selection chrome, then the HUD.
 
 use gpui::{
-    AnyElement, Bounds, Context, CursorStyle, DispatchPhase, InteractiveElement, IntoElement, KeyDownEvent,
+    AnyElement, Bounds, Context, CursorStyle, DispatchPhase, ElementInputHandler, InteractiveElement, IntoElement, KeyDownEvent,
     ModifiersChangedEvent, MouseButton, MouseDownEvent, MouseMoveEvent, MouseUpEvent, ParentElement, Pixels, Render,
     Styled, Window, canvas, div, img, point, px, rgb, rgba, size,
 };
@@ -24,6 +24,10 @@ impl Overlay {
     }
 
     fn cursor_style(&self) -> CursorStyle {
+        if self.editor.is_dragging_text() { return CursorStyle::ClosedHand; }
+        if matches!(self.mode, Mode::Select | Mode::Draw(DrawTool::Text))
+            && self.cursor.or(self.hover).is_some_and(|point| self.editor.hit_text(point).is_some())
+        { return CursorStyle::OpenHand; }
         if self.ocr.active || self.mode == Mode::Draw(DrawTool::Text) {
             return CursorStyle::IBeam;
         }
@@ -176,12 +180,18 @@ impl Render for Overlay {
             handles: if show_handles && self.polygon.is_none() { self.sel.active.as_ref().map(|a| a.bounds) } else { None },
             handle_size: HANDLE_SIZE,
             ocr_words: self.ocr.line_boxes(),
+            text_bounds: matches!(self.mode, Mode::Select | Mode::Draw(DrawTool::Text))
+                .then(|| self.editor.selected_text_bounds()).flatten(),
         };
 
         let entity = cx.entity();
         let layers = canvas(
             |_, _, _| {},
-            move |bounds: Bounds<Pixels>, _, window, _| {
+            move |bounds: Bounds<Pixels>, _, window, cx| {
+                if entity.read(cx).editor.is_typing() && !entity.read(cx).panel.has_field() {
+                    let focus = entity.read(cx).focus.clone();
+                    window.handle_input(&focus, ElementInputHandler::new(bounds, entity.clone()), cx);
+                }
                 scene.paint(bounds.origin, window);
                 surface.paint(bounds.origin, window);
                 // Window-level listeners: like a WPF mouse capture, a drag keeps receiving

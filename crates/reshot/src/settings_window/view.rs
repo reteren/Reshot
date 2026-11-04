@@ -639,6 +639,9 @@ const BINDS: &[(&str, &[Bind])] = &[
         "Text tool",
         &[
             (&["LMB"], "Place the caret and start typing"),
+            (&["LMB", "drag"], "Move an existing text block (Selection tool works too)"),
+            (&["Double click"], "Edit an existing text block"),
+            (&["Delete"], "Remove the selected text block"),
             (&["Enter"], "New line"),
             (&["Backspace"], "Delete the last character"),
             (&["Esc"], "Finish the text and keep it (clicking away does the same)"),

@@ -128,14 +128,18 @@ outline by `width × (1 − hardness) × 0.35`.
 ### 6.3 Shapes and lines
 
 - Shapes: square, circle, triangle. Lines: straight line and arrow.
-- Shapes and text are **baked into the paint layer** when committed, so the eraser removes
-  them pixel by pixel like any other ink. They cannot be moved after the fact.
+- Shapes are **baked into the paint layer** when committed, so the eraser removes them
+  pixel by pixel. Text remains a separate movable annotation above the paint layer.
 
 ### 6.4 Text
 
 - Settings: font size, colour, opacity.
 - Typing inserts characters, `Enter` starts a new line, `Backspace` deletes.
 - `Esc`, clicking away, or switching tools commits the text and keeps it.
+- Drag an existing block with the Text or Selection tool to move it, keeping the grab offset.
+- Double-click a block with the Text tool to edit it. Delete removes the selected block.
+- A complete drag is one undo step. Text edits, moves, erasures and deletion support redo.
+- Normal erasing removes text pixel by pixel; erased parts stay erased when the block moves.
 
 ### 6.5 Tool settings
 
@@ -359,8 +363,8 @@ The interface is English only, with a fixed dark theme.
 
 ## 18. Known deviations from this specification
 
-- The vector layer was dropped. Shapes and text are baked into the paint layer on commit,
-  so the eraser can remove parts of them. In exchange they cannot be moved afterwards.
+- Shapes remain rasterised and cannot be moved after committing. Text has its own retained
+  annotation layer and keeps per-object erasure coverage when moved.
 - Undo stores whole-region snapshots rather than 256x256 tiles, which costs more memory on
   large strokes.
 - Automatic updates are not implemented.

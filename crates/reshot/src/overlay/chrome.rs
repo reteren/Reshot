@@ -24,6 +24,7 @@ pub struct ChromeScene {
     pub handles: Option<Rect>,
     pub handle_size: f32,
     pub ocr_words: Vec<(Rect, bool)>,
+    pub text_bounds: Option<Rect>,
 }
 
 /// The outline of a selection as a closed polyline in frame pixels.
@@ -99,6 +100,14 @@ impl ChromeScene {
             ));
         }
 
+        if let Some(text) = self.text_bounds {
+            let r = text.with_outset((4.0, 4.0));
+            let points = [SkPoint::new(r.left, r.top), SkPoint::new(r.right, r.top),
+                SkPoint::new(r.right, r.bottom), SkPoint::new(r.left, r.bottom)];
+            let mut outline = PathBuilder::stroke(px(1.0)).dash_array(&[px(4.0), px(3.0)]);
+            outline.add_polygon(&points.map(|p| at(self.p(p))), true);
+            if let Ok(path) = outline.build() { window.paint_path(path, accent); }
+        }
         if let Some(sel) = self.handles {
             let s = px(self.handle_size);
             for h in Handle::ALL {
