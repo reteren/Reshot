@@ -399,9 +399,22 @@ fn outlined_crosshair() -> Option<windows::Win32::UI::WindowsAndMessaging::HCURS
     (raw != 0).then_some(HCURSOR(raw as _))
 }
 
-/// Swaps the stock crosshair for the outlined one on `hwnd`. gpui sets its cursor from
-/// WM_SETCURSOR using the shared system crosshair; this subclass lets it do so and then
-/// replaces that one cursor, leaving every other shape (I-beam, resize, hand) alone.
+/// Starts the native Windows move loop for a custom title bar. Call outside a gpui update:
+/// SendMessage re-enters the window procedure while Windows tracks the drag.
+pub fn begin_window_drag(hwnd: HWND) {
+    use windows::Win32::Foundation::{LPARAM, WPARAM};
+    use windows::Win32::UI::WindowsAndMessaging::{HTCAPTION, SC_MOVE, SendMessageW, WM_SYSCOMMAND};
+    unsafe {
+        let _ = ReleaseCapture();
+        let (x, y) = cursor_pos();
+        let position = LPARAM((((y as u32 & 0xffff) << 16) | (x as u32 & 0xffff)) as isize);
+        // WM_NCLBUTTONDOWN is translated back into a gpui mouse event, where the header's
+        // propagation guard consumes it. SC_MOVE reaches the native move loop directly.
+        SendMessageW(hwnd, WM_SYSCOMMAND, Some(WPARAM((SC_MOVE | HTCAPTION) as usize)), Some(position));
+    }
+}
+
+/// Swaps the stock crosshair for the outlined one on `hwnd`, leaving other cursors alone.
 pub fn use_outlined_crosshair(hwnd: HWND) {
     use windows::Win32::Foundation::{LPARAM, LRESULT, WPARAM};
     use windows::Win32::UI::Shell::{DefSubclassProc, SetWindowSubclass};

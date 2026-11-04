@@ -9,7 +9,7 @@ use gpui::prelude::FluentBuilder;
 use gpui::{
     AnyElement, Context, Div, Focusable, FontWeight, InteractiveElement, IntoElement,
     KeyDownEvent, MouseButton, ParentElement, Render, SharedString, Stateful,
-    StatefulInteractiveElement, Styled, Window, WindowControlArea, canvas, deferred, div, px,
+    StatefulInteractiveElement, Styled, Window, canvas, deferred, div, px,
     relative, rgb, rgba, svg,
 };
 
@@ -771,6 +771,15 @@ impl Render for SettingsWindow {
                     .flex()
                     .items_center()
                     .justify_between()
+                    .on_mouse_down(MouseButton::Left, |_, window, cx| {
+                        if let Some(hwnd) = crate::winutil::hwnd(window) {
+                            let raw = hwnd.0 as isize;
+                            crate::winutil::after_update(cx, move || {
+                                reshot_platform::win::begin_window_drag(reshot_platform::win::hwnd(raw));
+                            });
+                        }
+                        cx.stop_propagation();
+                    })
                     .child(
                         // Chrome's half-leading sets the caps 1 px lower than gpui's. The
                         // reference's `letter-spacing: 0.04em` has no gpui equivalent; spacing
@@ -782,12 +791,12 @@ impl Render for SettingsWindow {
                             .text_size(px(10.))
                             .line_height(px(12.5))
                             .font_weight(FontWeight::BOLD)
-                            .window_control_area(WindowControlArea::Drag)
                             .child("RESHOT · SETTINGS"),
                     )
                     .child(
                         div()
                             .id("settings-close")
+                            .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
                             .size(px(16.))
                             .flex_none()
                             .cursor_pointer()
