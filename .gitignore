@@ -1,11 +1,19 @@
 # ==== Build output ====
-/target/
+# Cargo output, including nested crates and the former rust/ workspace.
+target/
+
+# Leftovers from the former .NET / Tauri application and its tests.
+node_modules/
+/src/**/[Bb]in/
+/src/**/[Oo]bj/
+/tests/**/[Bb]in/
+/tests/**/[Oo]bj/
 
 # Release artifacts produced by build/build-release.ps1
 dist/
 
 # Downloaded by build/fetch-ffmpeg.ps1; the pinned binary is never committed.
-build/ffmpeg/
+/build/ffmpeg/
 
 # ==== Editors, IDEs and local tooling ====
 # Personal configuration: never useful to anyone else, and it leaks local paths.
