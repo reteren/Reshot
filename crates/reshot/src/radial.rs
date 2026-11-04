@@ -5,7 +5,7 @@ use std::f32::consts::PI;
 use std::time::{Duration, Instant};
 
 use gpui::{
-    App, AppContext, AsyncApp, Context, FocusHandle, Focusable, Global, InteractiveElement,
+    App, AppContext, Context, FocusHandle, Focusable, Global, InteractiveElement,
     IntoElement, KeyDownEvent, MouseButton, MouseDownEvent, ParentElement, PathBuilder, Render,
     Bounds, Styled, TransformationMatrix, Window, WindowHandle, canvas, div, point, px, rgb, size,
 };
@@ -20,7 +20,6 @@ const OUTER: f32 = 132.0;
 const INNER: f32 = 46.0;
 const EXTEND: f32 = 14.0;
 const RADIUS: f32 = OUTER + EXTEND + 8.0;
-const POLL: Duration = Duration::from_millis(16);
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum Choice {
@@ -86,6 +85,8 @@ pub fn open(cx: &mut App, vk: u32) {
                     hover: None,
                     hover_amount: [0.0; 3],
                     opened: Instant::now(),
+                    last_tick: Instant::now(),
+                    frames: 0,
                     closing: None,
                     chosen: None,
                 }
@@ -118,38 +119,6 @@ pub fn open(cx: &mut App, vk: u32) {
             winutil::keep_over_game(cx, handle, raw);
         }
     }
-    cx.spawn(async move |cx: &mut AsyncApp| {
-        loop {
-            cx.background_executor().timer(POLL).await;
-            let cursor = win::cursor_pos();
-            let left = win::is_key_down(1);
-            let right = win::is_key_down(2);
-            let key = win::is_key_down(vk);
-            match cx.update(|cx| {
-                handle.update(cx, |menu, window, cx| {
-                    menu.tick(cursor, left, right, key, window, cx)
-                })
-            }) {
-                Ok(Ok(Some(choice))) => {
-                    let _ = cx.update(|cx| {
-                        cx.global_mut::<RadialState>().0 = None;
-                        match choice {
-                            Choice::Record => recording::quick_record_primary_monitor(cx),
-                            Choice::Audio => recording::quick_audio_all_sources(cx),
-                            Choice::Settings => app::open_settings(cx),
-                        }
-                    });
-                    break;
-                }
-                Ok(Ok(None)) => {}
-                _ => {
-                    let _ = cx.update(|cx| cx.global_mut::<RadialState>().0 = None);
-                    break;
-                }
-            }
-        }
-    })
-    .detach();
 }
 
 fn clamp(value: i32, lo: i32, hi: i32) -> i32 {
@@ -181,6 +150,8 @@ struct RadialMenu {
     hover: Option<usize>,
     hover_amount: [f32; 3],
     opened: Instant,
+    last_tick: Instant,
+    frames: u32,
     closing: Option<Instant>,
     chosen: Option<Choice>,
 }
@@ -207,11 +178,17 @@ impl RadialMenu {
         key: bool,
         window: &mut Window,
         cx: &mut Context<Self>,
-    ) -> Option<Choice> {
+    ) -> Option<Option<Choice>> {
+        let now = Instant::now();
+        self.frames += 1;
+        let elapsed = now.duration_since(self.last_tick).as_secs_f32();
+        self.last_tick = now;
         if let Some(closing) = self.closing {
             if closing.elapsed() >= Duration::from_millis(160) {
+                log::info!("Radial: {} rendered frames in {:.3} s ({:.1} fps).", self.frames,
+                    self.opened.elapsed().as_secs_f32(), self.frames as f32 / self.opened.elapsed().as_secs_f32());
                 window.remove_window();
-                return self.chosen.take();
+                return Some(self.chosen.take());
             }
             cx.notify();
             return None;
@@ -221,7 +198,7 @@ impl RadialMenu {
         self.hover = slice_at(dx, dy, self.vk == 0);
         for (i, amount) in self.hover_amount.iter_mut().enumerate() {
             let target = if self.hover == Some(i) { 1.0 } else { 0.0 };
-            *amount += (target - *amount) * 0.35;
+            *amount = approach(*amount, target, elapsed);
         }
         let left_pressed = left && !self.left_down;
         let right_pressed = right && !self.right_down;
@@ -253,7 +230,26 @@ impl Focusable for RadialMenu {
 }
 
 impl Render for RadialMenu {
-    fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        // Input and animation advance with the display, rather than a coarse Windows timer
+        // followed by another wait for presentation. Polling outside the window still works.
+        window.request_animation_frame();
+        let menu = cx.entity().downgrade();
+        window.on_next_frame(move |window, cx| {
+            let outcome = menu.update(cx, |menu, cx| {
+                menu.tick(win::cursor_pos(), win::is_key_down(1), win::is_key_down(2),
+                    menu.vk == 0 || win::is_key_down(menu.vk), window, cx)
+            });
+            if let Ok(Some(choice)) = outcome {
+                cx.global_mut::<RadialState>().0 = None;
+                cx.defer(move |cx| match choice {
+                    Some(Choice::Record) => recording::quick_record_primary_monitor(cx),
+                    Some(Choice::Audio) => recording::quick_audio_all_sources(cx),
+                    Some(Choice::Settings) => app::open_settings(cx),
+                    None => {},
+                });
+            }
+        });
         let t = (self.opened.elapsed().as_secs_f32() / 0.18).min(1.0);
         let exit = self
             .closing
@@ -347,6 +343,10 @@ impl Render for RadialMenu {
     }
 }
 
+fn approach(current: f32, target: f32, elapsed: f32) -> f32 {
+    target + (current - target) * (-27.0 * elapsed).exp()
+}
+
 fn blend(a: gpui::Rgba, b: gpui::Rgba, t: f32) -> gpui::Rgba {
     gpui::Rgba {
         r: a.r + (b.r - a.r) * t,
@@ -428,6 +428,15 @@ fn paint_icon(window: &mut Window, cx: &App, i: usize, c: (f32, f32), scale: f32
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn hover_motion_is_independent_of_display_refresh_rate() {
+        let mut fast = 0.0;
+        for _ in 0..24 { fast = approach(fast, 1.0, 1.0 / 240.0); }
+        let mut slow = 0.0;
+        for _ in 0..6 { slow = approach(slow, 1.0, 1.0 / 60.0); }
+        assert!((fast - slow).abs() < 0.00001);
+        assert!(approach(fast, 0.0, 1.0 / 60.0) < fast);
+    }
     #[test]
     fn rim_bounds_clicks_but_not_release_flicks() {
         assert_eq!(slice_at(0.0, -200.0, true), None);
