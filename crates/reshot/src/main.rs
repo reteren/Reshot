@@ -10,7 +10,6 @@ mod radial;
 mod recording;
 mod settings_window;
 mod theme;
-mod tray_menu;
 mod winutil;
 
 use reshot_core::settings::SettingsService;
@@ -72,7 +71,7 @@ fn main() {
 
     // gpui (Direct3D, DirectWrite, its executors) is started by the first thing that needs a
     // window, not at boot: until then the process is the tray, the hotkeys and nothing else.
-    // The first press pays for the start-up, as the first WPF window did in the C# build.
+    // The tray menu runs entirely on its shell thread; only an action needing UI starts gpui.
     let capture_now = std::env::args().any(|a| a.eq_ignore_ascii_case("--capture"));
     // `--settings` opens the settings window at once; `--settings=<tab>` picks the tab.
     let settings_now = std::env::args().find_map(|a| {
@@ -84,20 +83,20 @@ fn main() {
     });
     let preview = cfg!(debug_assertions)
         && std::env::args().any(|a| ["--preview-track-prompt", "--preview-radial", "--preview-recording-hud", "--bench-video", "--bench-audio", "--bench-cycles", "--bench-mem"].iter().any(|f| a.eq_ignore_ascii_case(f)));
-    if !capture_now && settings_now.is_none() && !preview {
+    let initial_event = if !capture_now && settings_now.is_none() && !preview {
         match events_rx.recv_blocking() {
             Ok(first) => {
+                if first == reshot_platform::shell::ShellEvent::TrayQuit { return; }
                 log::info!("Startup: first use ({first:?}); starting the UI.");
-                // Handed back so the UI handles it like any other event.
-                let _ = shell.event_sender().try_send(first);
+                Some(first)
             }
             Err(_) => return,
         }
-    }
+    } else { None };
 
     let resident = app::Resident { settings, shell, single, main_vk };
     gpui::Application::new().with_assets(assets::Assets).run(move |cx| {
-        app::init(cx, resident, events_rx, capture_now, settings_now);
+        app::init(cx, resident, events_rx, initial_event, capture_now, settings_now);
     });
     log::info!("Shutdown complete.");
 }

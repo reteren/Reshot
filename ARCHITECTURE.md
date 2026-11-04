@@ -9,7 +9,7 @@ for three reasons:
 
 - **One UI technology instead of two.** The overlay was WPF and the settings window a
   WebView2 page in another process; the Half-Life 2 / Source look had to be built twice and
-  kept in step twice. Now every window is gpui.
+  kept in step twice. Application windows now use gpui; the small tray menu is owner-drawn Win32.
 - **Idle cost.** The resident process is the tray thread and the hotkeys and nothing else:
   about 21 MB of working set and 0% CPU, with no runtime and no UI framework loaded until
   the first press (§7).
@@ -23,7 +23,8 @@ erasers and exports produce the same pixels.
 | Layer | Technology | Why |
 |---|---|---|
 | Language | Rust 2024, MSVC toolchain, x64 | One native executable |
-| Every window | **gpui** (Zed's UI framework): overlay, toolbar, radial menu, tray menu, recording HUD, audio-track prompt, settings | GPU-drawn, fully stylable; the VGUI bevels are plain elements |
+| Application windows | **gpui** (Zed's UI framework): overlay, toolbar, radial menu, recording HUD, audio-track prompt, settings | GPU-drawn, fully stylable; the VGUI bevels are plain elements |
+| Tray menu | Win32 `TrackPopupMenu`, GDI owner drawing | Opens on the shell thread without initialising gpui; retains the VGUI palette and bevels |
 | Editor canvas | **Skia** through `skia-safe` (prebuilt) | Brushes, alpha, blur, pixelation, arbitrary paths and text, all in one library |
 | Screen capture | **DXGI Desktop Duplication** for snapshots, **Windows.Graphics.Capture** for recording and as the snapshot fallback, through the `windows` crate | See §6: duplication hands back a desktop that never had a cursor in it, WGC has to switch the cursor off to match and that blinks |
 | Global hotkey and tray | `RegisterHotKey` and `Shell_NotifyIcon` on a message-only window, on their own thread | Zero background cost: the message arrives in a message loop |
@@ -42,14 +43,14 @@ reshot/
 │   │       ├── overlay/     session window, toolbar, tool panels, OCR layer
 │   │       ├── recording/   recording HUD, corner brackets, audio-track prompt
 │   │       ├── settings_window/
-│   │       ├── radial.rs    hold-to-open quick menu
-│   │       └── tray_menu.rs
+│   │       └── radial.rs    hold-to-open quick menu
 │   ├── reshot-core/         no windows: document, tools, history, selections, editor,
 │   │                        export, settings, hotkeys, session state machine, fonts, log
 │   ├── reshot-capture/      Desktop Duplication + Windows.Graphics.Capture
 │   ├── reshot-recording/    ffmpeg process and arguments, WASAPI, PCM tracks, mux
 │   ├── reshot-ocr/          Windows.Media.Ocr
-│   └── reshot-platform/     tray and hotkeys thread, single instance, autostart, clipboard
+│   └── reshot-platform/     tray and hotkeys thread, native tray menu, single instance,
+│                          autostart, clipboard
 ├── build/                   release script and the installer
 └── docs/
 ```
@@ -210,8 +211,8 @@ on very large strokes.
 - The background process is a message-only window plus `RegisterHotKey` plus the tray, on
   their own thread. No timers, no polling, no watchers.
 - **gpui is not started at startup.** Its Direct3D device and DirectWrite factory cost about
-  60 MB of working set, so the UI starts on first use (hotkey, tray, a second launch) and
-  the first press is that much slower, as the first WPF window was in the C# build.
+  60 MB of working set, so the UI starts when a hotkey or tray command needs a window.
+  Opening and dismissing the tray menu stays on the shell thread and does not pay this cost.
   Measured idle before that: 20.8 MB working set, 3.9 MB private, 0 CPU.
 - Every capture resource (D3D device, frame pool) is released when the session closes.
 

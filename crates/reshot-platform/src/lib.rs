@@ -7,3 +7,4 @@ pub mod security;
 pub mod shell;
 pub mod single_instance;
 pub mod win;
+mod tray_menu;

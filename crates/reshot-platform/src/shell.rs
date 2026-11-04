@@ -25,6 +25,10 @@ use windows::Win32::UI::WindowsAndMessaging::{
 use windows::core::{PCWSTR, w};
 
 use reshot_core::hotkey::HotkeyDefinition;
+use crate::tray_menu::{self, TrayMenu};
+use windows::Win32::UI::Controls::{DRAWITEMSTRUCT, MEASUREITEMSTRUCT};
+use windows::Win32::UI::WindowsAndMessaging::{EndMenu, TrackPopupMenu, TPM_BOTTOMALIGN, TPM_RIGHTALIGN,
+    TPM_RETURNCMD, TPM_NONOTIFY, TPM_RIGHTBUTTON, TPM_NOANIMATION, WM_DRAWITEM, WM_MEASUREITEM, WM_NULL};
 
 /// Which registered hotkey fired.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
@@ -51,10 +55,11 @@ impl HotkeySlot {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum ShellEvent {
     Hotkey(HotkeySlot),
-    /// Left or right click on the tray icon: open the tray menu.
-    TrayMenu,
     /// Double click on the tray icon: start a capture.
     TrayCapture,
+    TraySettings,
+    TrayPause(bool),
+    TrayQuit,
     /// Another `reshot.exe` was launched and exited in our favour.
     SecondInstance,
 }
@@ -70,6 +75,7 @@ enum Command {
     Register(HotkeySlot, HotkeyDefinition, mpsc::Sender<Result<()>>),
     Unregister(HotkeySlot),
     Balloon(String, String, BalloonIcon),
+    Paused(bool),
     Quit,
 }
 
@@ -82,7 +88,6 @@ pub struct Shell {
     hwnd: isize,
     commands: mpsc::Sender<Command>,
     thread: Option<std::thread::JoinHandle<()>>,
-    events: async_channel::Sender<ShellEvent>,
 }
 
 struct State {
@@ -93,6 +98,10 @@ struct State {
     taskbar_created: u32,
     commands: mpsc::Receiver<Command>,
     events: async_channel::Sender<ShellEvent>,
+    menu: Option<TrayMenu>,
+    menu_open: bool,
+    paused: bool,
+    ignore_left_up_until: Option<std::time::Instant>,
 }
 
 thread_local! {
@@ -111,12 +120,7 @@ impl Shell {
             .name("reshot-shell".into())
             .spawn(move || run(icon_resource_id, tooltip, cmd_rx, events, ready_tx))?;
         let hwnd = ready_rx.recv().context("shell thread died during start-up")??;
-        Ok(Shell { hwnd, commands: cmd_tx, thread: Some(thread), events: events_tx })
-    }
-
-    /// A sender other parts of the app (single instance) can post events through.
-    pub fn event_sender(&self) -> async_channel::Sender<ShellEvent> {
-        self.events.clone()
+        Ok(Shell { hwnd, commands: cmd_tx, thread: Some(thread) })
     }
 
     fn send(&self, c: Command) {
@@ -143,6 +147,8 @@ impl Shell {
     pub fn show_balloon(&self, title: &str, text: &str, icon: BalloonIcon) {
         self.send(Command::Balloon(title.into(), text.into(), icon));
     }
+
+    pub fn set_paused(&self, paused: bool) { self.send(Command::Paused(paused)); }
 }
 
 impl Drop for Shell {
@@ -177,11 +183,14 @@ fn run(
             ..Default::default()
         };
         RegisterClassW(&class);
+        // A visible owner lets the menu be inspected by window-based UI test tools. The
+        // production owner stays hidden; both paths use the same tracking and drawing code.
+        let preview = cfg!(debug_assertions) && std::env::args().any(|arg| arg == "--preview-tray-menu");
         let hwnd = match CreateWindowExW(
             WINDOW_EX_STYLE(0),
             w!("reshot.shell"),
             w!("reshot"),
-            WS_OVERLAPPED,
+            if preview { windows::Win32::UI::WindowsAndMessaging::WS_OVERLAPPEDWINDOW } else { WS_OVERLAPPED },
             0,
             0,
             0,
@@ -211,10 +220,18 @@ fn run(
         };
         let taskbar_created = RegisterWindowMessageW(w!("TaskbarCreated"));
         STATE.with(|s| {
-            *s.borrow_mut() = Some(State { hwnd, icon, owns_icon, tooltip, taskbar_created, commands, events });
+            *s.borrow_mut() = Some(State { hwnd, icon, owns_icon, tooltip, taskbar_created, commands, events,
+                menu: None, menu_open: false, paused: false, ignore_left_up_until: None });
         });
         add_tray_icon();
         let _ = ready.send(Ok(hwnd.0 as isize));
+        if preview {
+            use windows::Win32::UI::WindowsAndMessaging::{SetWindowPos, SetWindowTextW, ShowWindow, SW_SHOWNOACTIVATE, SWP_NOACTIVATE};
+            let _ = SetWindowTextW(hwnd, w!("Reshot tray menu preview"));
+            let _ = SetWindowPos(hwnd, None, 400, 300, 300, 240, SWP_NOACTIVATE);
+            let _ = ShowWindow(hwnd, SW_SHOWNOACTIVATE);
+            let _ = PostMessageW(Some(hwnd), WM_TRAY, WPARAM(0), LPARAM(WM_RBUTTONUP as isize));
+        }
 
         let mut msg = MSG::default();
         while GetMessageW(&mut msg, None, 0, 0).as_bool() {
@@ -311,8 +328,12 @@ fn handle_commands() {
                     }
                 }),
                 Command::Quit => {
+                    let _ = EndMenu();
                     let _ = DestroyWindow(hwnd);
                 }
+                Command::Paused(paused) => STATE.with(|s| {
+                    if let Some(st) = s.borrow_mut().as_mut() { st.paused = paused; }
+                }),
             }
         }
     }
@@ -326,27 +347,95 @@ fn emit(e: ShellEvent) {
     });
 }
 
+fn show_tray_menu(hwnd: HWND) {
+    let started = std::time::Instant::now();
+    let menu = STATE.with(|s| {
+        let mut state = s.borrow_mut();
+        let st = state.as_mut()?;
+        if st.menu_open { return None; }
+        if st.menu.is_none() {
+            match TrayMenu::new() {
+                Ok(menu) => st.menu = Some(menu),
+                Err(error) => { log::error!("Tray menu: {error:#}"); return None; }
+            }
+        }
+        let menu = st.menu.as_ref()?;
+        menu.prepare(st.paused, started);
+        st.menu_open = true;
+        Some(menu.handle)
+    });
+    let Some(menu) = menu else { return };
+    let (x, y) = crate::win::cursor_pos();
+    log::info!("Tray menu: ready in {:.1} ms (shell thread).", started.elapsed().as_secs_f64() * 1000.0);
+    // TrackPopupMenu pumps a nested message loop: never hold STATE's RefCell borrow here.
+    // The shell window owns both the callback and menu, so foreground is established on
+    // this thread with no cross-thread handoff or UI initialisation race.
+    let command = unsafe {
+        let _ = SetForegroundWindow(hwnd);
+        let command = TrackPopupMenu(menu, TPM_RIGHTALIGN | TPM_BOTTOMALIGN | TPM_RETURNCMD
+            | TPM_NONOTIFY | TPM_RIGHTBUTTON | TPM_NOANIMATION, x, y, None, hwnd, None).0 as u32;
+        // Required for notification menus to dismiss and open correctly on the next click.
+        let _ = PostMessageW(Some(hwnd), WM_NULL, WPARAM(0), LPARAM(0));
+        command
+    };
+    let event = STATE.with(|s| {
+        let mut state = s.borrow_mut();
+        let st = state.as_mut()?;
+        st.menu_open = false;
+        match command {
+            tray_menu::CAPTURE => Some(ShellEvent::TrayCapture),
+            tray_menu::SETTINGS => Some(ShellEvent::TraySettings),
+            tray_menu::PAUSE => { st.paused = !st.paused; Some(ShellEvent::TrayPause(st.paused)) },
+            tray_menu::QUIT => Some(ShellEvent::TrayQuit),
+            _ => None,
+        }
+    });
+    if let Some(event) = event { emit(event); }
+}
+
 unsafe extern "system" fn wnd_proc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: LPARAM) -> LRESULT {
     let taskbar_created = STATE.with(|s| s.borrow().as_ref().map(|st| st.taskbar_created)).unwrap_or(0);
     match msg {
         WM_HOTKEY => {
             if let Some(slot) = HotkeySlot::from_id(wparam.0 as i32) {
+                unsafe { let _ = EndMenu(); }
                 emit(ShellEvent::Hotkey(slot));
             }
             LRESULT(0)
         }
         WM_TRAY => {
             match lparam.0 as u32 {
-                WM_LBUTTONUP | WM_RBUTTONUP | WM_CONTEXTMENU => {
-                    // SAFETY: our own window; lets the menu window take the foreground.
-                    unsafe {
-                        let _ = SetForegroundWindow(hwnd);
-                    }
-                    emit(ShellEvent::TrayMenu);
+                WM_LBUTTONUP => {
+                    let ignore = STATE.with(|s| s.borrow_mut().as_mut()
+                        .and_then(|st| st.ignore_left_up_until.take())
+                        .is_some_and(|until| std::time::Instant::now() < until));
+                    if !ignore { show_tray_menu(hwnd); }
                 }
-                WM_LBUTTONDBLCLK => emit(ShellEvent::TrayCapture),
+                WM_RBUTTONUP | WM_CONTEXTMENU => show_tray_menu(hwnd),
+                WM_LBUTTONDBLCLK => {
+                    STATE.with(|s| { if let Some(st) = s.borrow_mut().as_mut() {
+                        st.ignore_left_up_until = Some(std::time::Instant::now() + std::time::Duration::from_millis(
+                            unsafe { windows::Win32::UI::Input::KeyboardAndMouse::GetDoubleClickTime() } as u64));
+                    } });
+                    unsafe { let _ = EndMenu(); }
+                    emit(ShellEvent::TrayCapture);
+                }
                 _ => {}
             }
+            LRESULT(0)
+        }
+        WM_MEASUREITEM if lparam.0 != 0 => {
+            let handled = STATE.with(|s| s.borrow().as_ref().and_then(|st| st.menu.as_ref())
+                .is_some_and(|menu| menu.measure(unsafe { &mut *(lparam.0 as *mut MEASUREITEMSTRUCT) })));
+            if handled { LRESULT(1) } else { unsafe { DefWindowProcW(hwnd, msg, wparam, lparam) } }
+        }
+        WM_DRAWITEM if lparam.0 != 0 => {
+            let handled = STATE.with(|s| s.borrow().as_ref().and_then(|st| st.menu.as_ref())
+                .is_some_and(|menu| menu.draw(unsafe { &*(lparam.0 as *const DRAWITEMSTRUCT) })));
+            if handled { LRESULT(1) } else { unsafe { DefWindowProcW(hwnd, msg, wparam, lparam) } }
+        }
+        WM_CONTEXTMENU => {
+            show_tray_menu(hwnd);
             LRESULT(0)
         }
         WM_COMMAND_READY => {

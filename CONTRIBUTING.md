@@ -13,6 +13,7 @@ cargo test --workspace
 cargo clippy --workspace -- -D warnings
 cargo run -p reshot -- --capture          # start a capture right away
 cargo run -p reshot -- --settings=info    # open the settings window on a tab
+cargo run -p reshot -- --preview-tray-menu # inspect the native tray menu without starting gpui (debug only)
 ```
 
 Recording needs `ffmpeg.exe`. `pwsh build/fetch-ffmpeg.ps1` downloads the pinned build into

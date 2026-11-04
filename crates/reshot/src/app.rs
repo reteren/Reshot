@@ -14,7 +14,6 @@ use reshot_platform::single_instance::SingleInstance;
 use reshot_platform::{autostart, win};
 
 use crate::overlay::Overlay;
-use crate::tray_menu::TrayMenu;
 use crate::winutil;
 
 /// Holding the hotkey longer than this opens the radial menu instead of capturing.
@@ -38,7 +37,6 @@ pub struct ReshotApp {
     /// and is dropped, so a slow capture never opens a session on a screen the user left.
     capture_generation: u64,
     overlay: Option<WindowHandle<Overlay>>,
-    tray_menu: Option<WindowHandle<TrayMenu>>,
 }
 
 impl Global for ReshotApp {}
@@ -99,6 +97,7 @@ pub fn init(
     cx: &mut App,
     resident: Resident,
     events: async_channel::Receiver<ShellEvent>,
+    initial_event: Option<ShellEvent>,
     capture_now: bool,
     settings_now: Option<String>,
 ) {
@@ -121,11 +120,14 @@ pub fn init(
         press_generation: 0,
         capture_generation: 0,
         overlay: None,
-        tray_menu: None,
     };
     cx.set_global(app);
 
     cx.spawn(async move |cx: &mut AsyncApp| {
+        // Keep the event which woke the UI ahead of clicks queued during UI startup.
+        if let Some(event) = initial_event {
+            let _ = cx.update(|cx| on_shell_event(event, cx));
+        }
         while let Ok(event) = events.recv().await {
             if cx.update(|cx| on_shell_event(event, cx)).is_err() {
                 break;
@@ -273,8 +275,10 @@ fn on_shell_event(event: ShellEvent, cx: &mut App) {
     match event {
         ShellEvent::Hotkey(HotkeySlot::Main) => on_hotkey(cx),
         ShellEvent::Hotkey(HotkeySlot::Audio) => crate::recording::toggle_audio_from_settings(cx),
-        ShellEvent::TrayMenu => show_tray_menu(cx),
         ShellEvent::TrayCapture => capture(cx, "tray"),
+        ShellEvent::TraySettings => open_settings(cx),
+        ShellEvent::TrayPause(paused) => set_paused(cx, paused),
+        ShellEvent::TrayQuit => quit(cx),
         ShellEvent::SecondInstance => {
             log::info!("SingleInstance: another launch was redirected here.");
             balloon(cx, "Reshot is already running", "It lives in the tray.", BalloonIcon::Info);
@@ -427,20 +431,10 @@ pub fn overlay_closed(cx: &mut App) {
     app.session.reset();
 }
 
-fn show_tray_menu(cx: &mut App) {
-    if let Some(menu) = cx.global::<ReshotApp>().tray_menu
-        && menu.update(cx, |_, window, _| window.activate_window()).is_ok()
-    {
-        return;
-    }
-    let paused = cx.global::<ReshotApp>().paused;
-    let menu = TrayMenu::open(paused, cx);
-    cx.global_mut::<ReshotApp>().tray_menu = menu;
-}
-
 pub fn set_paused(cx: &mut App, paused: bool) {
     let app = cx.global_mut::<ReshotApp>();
     app.paused = paused;
+    app.shell.set_paused(paused);
     if paused {
         app.shell.unregister_hotkey(HotkeySlot::Main);
         app.shell.show_balloon("Reshot", "Hotkey paused.", BalloonIcon::Info);
