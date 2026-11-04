@@ -340,7 +340,7 @@ impl SettingsWindow {
             .child(para("System:"))
             .child(self.check(Toggle::Autostart, "Start with Windows", true, cx))
             .child(self.check(Toggle::Elevated, "As administrator", self.draft.autostart, cx))
-            .child(hint("Needed only to capture over applications that run as administrator. Windows asks for permission once, when this window closes; after that it starts elevated silently, through a scheduled task named “Reshot”.").flex_grow())
+            .child(hint("Requires an all-users installation in Program Files. Needed to capture over administrator applications. Windows asks for permission once to create the Reshot startup task.").flex_grow())
             .child(self.check(Toggle::Updates, "Check for updates automatically", true, cx))
             .child(separator())
             .child(hint(self.settings_path.clone()));

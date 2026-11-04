@@ -191,8 +191,8 @@ on very large strokes.
   that is then discarded. The key-hold time is the cheaper thing to spend.
 - A monitor that does not deliver a first frame within 1.2 s is a fullscreen game refusing
   capture, and the wait exists only to reach the `CreateForWindow` fallback below.
-- **Elevation is a hard wall.** Reshot runs `asInvoker` (ARCHITECTURE §10: the installer is
-  per user and needs no administrator rights). Against a window running elevated, UIPI
+- **Elevation is a hard wall.** Reshot runs `asInvoker` (ARCHITECTURE §10: the installer offers
+  per-user and protected all-users installations). Against a window running elevated, UIPI
   blocks `SetForegroundWindow`, `AttachThreadInput` and injected input alike, so the
   overlay cannot take the foreground no matter how it asks. The only real answers are to
   run that application unelevated, or to run Reshot elevated as well. The mechanism built
@@ -258,12 +258,20 @@ Editing → Recording → Idle
 ## 10. Distribution
 
 - A portable ZIP and an Inno Setup installer, both produced by `build/build-release.ps1`.
-  The installer is per user and needs no administrator rights.
+  The default per-user installation needs no administrator rights; the optional all-users
+  installation uses Program Files. Administrator startup and manually elevated launches
+  require that protected location, trusted ownership and restrictive DACLs on directories
+  and binaries. Unsafe elevated launches are refused before loading user settings.
 - The application is one `reshot.exe`; nothing else is installed beside it except ffmpeg.
 - A GPL `ffmpeg.exe` is bundled with the installer and the portable ZIP. It is what
   records, it adds roughly 145 MB, and it carries a licence obligation Reshot does not
   share: the binary is GPL even though Reshot stays MIT, so its licence and the source
   offer are shipped in `THIRD-PARTY-NOTICES.md`.
+- Release builds launch only the adjacent `ffmpeg.exe`, never an AppData or PATH fallback.
+  Its SHA-256 pin is compiled from `build/ffmpeg.sha256`, also used by the downloader and
+  packager. Verification holds read-only file and parent-directory handles through child
+  execution to prevent content replacement or directory renames. Concurrent children may
+  share the same verified, pinned executable; after it is released the next launch rehashes it.
 - There is no code signing (open source, no budget), so SmartScreen will complain at first.
   The README explains it.
 - **Automatic updates are not implemented.** Velopack was planned and the `update.auto`

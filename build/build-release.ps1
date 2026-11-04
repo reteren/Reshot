@@ -10,7 +10,7 @@
     Version stamped into the artifact names. Defaults to [workspace.package] version in
     Cargo.toml, so bumping it there is enough.
 .PARAMETER SkipFfmpeg
-    Skip fetching the pinned FFmpeg binary and reuse build/ffmpeg/ffmpeg.exe.
+    Skip fetching the pinned FFmpeg binary and verify the existing build/ffmpeg/ffmpeg.exe.
 .EXAMPLE
     pwsh build/build-release.ps1
 #>
@@ -54,6 +54,11 @@ if (-not $SkipFfmpeg) {
 }
 $ffmpegExe = Join-Path $PSScriptRoot 'ffmpeg/ffmpeg.exe'
 if (-not (Test-Path $ffmpegExe)) { Fail "FFmpeg binary missing: $ffmpegExe (run without -SkipFfmpeg)." }
+$expectedFfmpegHash = (Get-Content -LiteralPath (Join-Path $PSScriptRoot 'ffmpeg.sha256') -Raw).Trim()
+if ($expectedFfmpegHash -cnotmatch '^[0-9a-f]{64}$') { Fail 'Invalid pinned FFmpeg SHA-256.' }
+if ((Get-FileHash -LiteralPath $ffmpegExe -Algorithm SHA256).Hash.ToLowerInvariant() -cne $expectedFfmpegHash) {
+    Fail 'FFmpeg SHA-256 mismatch; refusing to build or package this binary.'
+}
 
 Step 'Running tests'
 cargo test --manifest-path (Join-Path $repo 'Cargo.toml') --workspace --release --locked
@@ -65,6 +70,9 @@ if ($LASTEXITCODE -ne 0) { Fail 'cargo build failed.' }
 
 Copy-Item (Join-Path $repo 'target/release/reshot.exe') (Join-Path $stage 'reshot.exe') -Force
 Copy-Item $ffmpegExe (Join-Path $stage 'ffmpeg.exe') -Force
+if ((Get-FileHash -LiteralPath (Join-Path $stage 'ffmpeg.exe') -Algorithm SHA256).Hash.ToLowerInvariant() -cne $expectedFfmpegHash) {
+    Fail 'Staged FFmpeg SHA-256 mismatch; refusing to package.'
+}
 Copy-Item (Join-Path $repo 'LICENSE') $stage -Force
 Copy-Item (Join-Path $repo 'README.md') $stage -Force
 Copy-Item (Join-Path $repo 'THIRD-PARTY-NOTICES.md') $stage -Force

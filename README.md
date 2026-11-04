@@ -30,13 +30,15 @@ everything outside a non rectangular selection stays transparent, in the clipboa
 - recording converts frames on the gpu and encodes with nvenc, amf or qsv if the card has them, libx264 if not
 - the overlay and the rec indicator are hidden from capture, so they never end up in your own video
 - the installer is around 48 mb because ffmpeg is inside. ffmpeg is gpl, reshot is mit, details in [THIRD-PARTY-NOTICES.md](THIRD-PARTY-NOTICES.md)
-- it can't come up over a program running as admin, windows doesn't let a normal process do that. for that there's a "start with windows as administrator" checkbox in settings
+- it can't come up over a program running as admin, windows doesn't let a normal process do that. for that there's a "start with windows as administrator" checkbox in settings, available after installing for all users in protected Program Files
 - monitors with different dpi scaling aren't supported yet
 - sound from a single app needs windows 11, russian text recognition needs the russian ocr pack in windows language settings
 
 ## install
 
-grab `reshot-x.y.z-setup.exe` or the portable zip from [releases](https://github.com/reteren/reshot/releases). it installs per user, no admin rights needed. the build isn't signed so smartscreen will complain on first run, click more info and run anyway
+grab `reshot-x.y.z-setup.exe` or the portable zip from [releases](https://github.com/reteren/reshot/releases). the installer offers a per-user installation without admin rights, or an all-users installation in Program Files for administrator mode. portable copies run without administrator rights. the build isn't signed so smartscreen will complain on first run, click more info and run anyway
+
+recording accepts only the bundled ffmpeg next to reshot.exe and checks its built-in SHA-256 before running it. if that file is missing or changed, recording is blocked; reinstall or restore the matching bundled file.
 
 ## license
 

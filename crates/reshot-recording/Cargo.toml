@@ -9,7 +9,12 @@ rust-version.workspace = true
 anyhow = { workspace = true }
 log = { workspace = true }
 reshot-capture = { workspace = true }
+sha2 = "0.10.9"
 wasapi = "=0.19.0"
 windows = { workspace = true, features = [
     "Win32_Foundation", "Win32_UI_WindowsAndMessaging", "Win32_System_Threading", "Win32_Media",
+    "Win32_Storage_FileSystem",
 ] }
+
+[dev-dependencies]
+tempfile = "3"

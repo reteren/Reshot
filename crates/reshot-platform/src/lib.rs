@@ -3,6 +3,7 @@
 
 pub mod autostart;
 pub mod clipboard;
+pub mod security;
 pub mod shell;
 pub mod single_instance;
 pub mod win;

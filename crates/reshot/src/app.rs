@@ -486,7 +486,7 @@ pub fn apply_settings(cx: &mut App, updated: AppSettings) {
             if !elevated {
                 app.shell.show_balloon(
                     "Reshot: starting normally",
-                    "Administrator rights were not granted, so Reshot will start with Windows without them. Overlays over elevated applications will not work.",
+                    "Administrator startup was not enabled. It requires a protected all-users installation in Program Files and Windows permission. Reshot will start normally.",
                     BalloonIcon::Warning,
                 );
             }

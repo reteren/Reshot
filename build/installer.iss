@@ -38,10 +38,13 @@ AppSupportURL={#AppUrl}/issues
 AppUpdatesURL={#AppUrl}/releases
 VersionInfoVersion={#AppVersion}
 
-; Per-user install: no admin prompt, and the autostart entry Reshot writes lives in
-; HKCU anyway, so an elevated install would only cause mismatched permissions.
+; Per-user remains the default. All-users installation places binaries in protected
+; Program Files and is required for Reshot's optional administrator startup mode.
 PrivilegesRequired=lowest
+PrivilegesRequiredOverridesAllowed=dialog
 DefaultDirName={autopf}\{#AppName}
+; Switching from an old user installation must not reuse its writable directory.
+UsePreviousAppDir=no
 DefaultGroupName={#AppName}
 DisableProgramGroupPage=yes
 ; Keep the wizard short: the confirmation step adds a click and tells the user nothing
@@ -79,8 +82,8 @@ Name: "english"; MessagesFile: "compiler:Default.isl"
 
 [Tasks]
 Name: "desktopicon"; Description: "{cm:CreateDesktopIcon}"; GroupDescription: "{cm:AdditionalIcons}"; Flags: unchecked
-Name: "autostart"; Description: "Start Reshot when Windows starts"; GroupDescription: "Startup:"
-Name: "freeprintscreen"; Description: "Let Reshot use the Print Screen key (turns off the Windows snipping shortcut)"; GroupDescription: "Print Screen key:"
+Name: "autostart"; Description: "Start Reshot when Windows starts"; GroupDescription: "Startup:"; Check: IsPerUserInstall
+Name: "freeprintscreen"; Description: "Let Reshot use the Print Screen key (turns off the Windows snipping shortcut)"; GroupDescription: "Print Screen key:"; Check: IsPerUserInstall
 
 [Files]
 ; Keep this explicit so the GPL binary is installed beside reshot.exe and tracked for uninstall.
@@ -96,7 +99,7 @@ Name: "{autodesktop}\{#AppName}"; Filename: "{app}\{#AppExe}"; Tasks: desktopico
 ; Reshot manages this key itself from its settings; seeding it here just honours the
 ; checkbox above. uninsdeletevalue keeps an uninstall from leaving a dead autostart.
 Root: HKCU; Subkey: "Software\Microsoft\Windows\CurrentVersion\Run"; ValueType: string; \
-    ValueName: "reshot"; ValueData: """{app}\{#AppExe}"""; Flags: uninsdeletevalue; Tasks: autostart
+    ValueName: "reshot"; ValueData: """{app}\{#AppExe}"""; Flags: uninsdeletevalue; Tasks: autostart; Check: IsPerUserInstall
 
 ; Windows 11 binds Print Screen to the snipping overlay, and that binding is ahead of the
 ; hotkey Reshot registers, so on a default install the app looks dead on its own default
@@ -107,10 +110,10 @@ Root: HKCU; Subkey: "Software\Microsoft\Windows\CurrentVersion\Run"; ValueType: 
 ; Windows default back when Reshot is uninstalled.
 Root: HKCU; Subkey: "Control Panel\Keyboard"; ValueType: dword; \
     ValueName: "PrintScreenKeyForSnippingEnabled"; ValueData: 0; \
-    Flags: uninsdeletevalue; Tasks: freeprintscreen
+    Flags: uninsdeletevalue; Tasks: freeprintscreen; Check: IsPerUserInstall
 
 [Run]
-Filename: "{app}\{#AppExe}"; Description: "{cm:LaunchProgram,{#AppName}}"; Flags: nowait postinstall skipifsilent
+Filename: "{app}\{#AppExe}"; Description: "{cm:LaunchProgram,{#AppName}}"; Flags: nowait postinstall skipifsilent runasoriginaluser
 
 [UninstallRun]
 ; The app lives in the tray; kill it so its files are not locked during uninstall.
@@ -119,13 +122,19 @@ Filename: "{sys}\taskkill.exe"; Parameters: "/F /IM reshot.exe"; \
     RunOnceId: "KillReshot"; Flags: runhidden skipifdoesntexist
 
 [Code]
+function IsPerUserInstall: Boolean;
+begin
+  Result := not IsAdminInstallMode;
+end;
+
 // Settings and logs live in %AppData%\reshot. Offer to remove them, but never assume:
 // people reinstall far more often than they truly leave.
 procedure CurUninstallStepChanged(CurUninstallStep: TUninstallStep);
 var
   DataDir: String;
 begin
-  if CurUninstallStep = usPostUninstall then
+  // A machine uninstall must not touch the administrator's personal profile.
+  if (CurUninstallStep = usPostUninstall) and IsPerUserInstall then
   begin
     DataDir := ExpandConstant('{userappdata}\reshot');
     if DirExists(DataDir) then

@@ -18,6 +18,26 @@ use reshot_platform::shell::Shell;
 use reshot_platform::single_instance::SingleInstance;
 
 fn main() {
+    // Refuse unsafe elevated copies before reading user-controlled settings or starting
+    // workers. Keep the installation handles pinned for the full application lifetime.
+    let _installation = match reshot_platform::security::guard_elevated_startup() {
+        Ok(installation) => installation,
+        Err(error) => {
+            let message = windows::core::HSTRING::from(format!(
+                "Reshot cannot start safely as administrator.\n\nInstall it for all users in Program Files, or launch it without administrator rights.\n\n{error:#}"
+            ));
+            unsafe {
+                windows::Win32::UI::WindowsAndMessaging::MessageBoxW(
+                    None,
+                    &message,
+                    windows::core::w!("Reshot: administrator mode blocked"),
+                    windows::Win32::UI::WindowsAndMessaging::MB_OK
+                        | windows::Win32::UI::WindowsAndMessaging::MB_ICONERROR,
+                );
+            }
+            return;
+        }
+    };
     // Logging first: a launch that dies on the single-instance check must still leave a trace.
     reshot_core::log::init();
     std::panic::set_hook(Box::new(|info| log::error!("Panic: {info}")));

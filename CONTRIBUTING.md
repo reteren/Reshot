@@ -16,8 +16,15 @@ cargo run -p reshot -- --settings=info    # open the settings window on a tab
 ```
 
 Recording needs `ffmpeg.exe`. `pwsh build/fetch-ffmpeg.ps1` downloads the pinned build into
-`build/ffmpeg`, where a debug build looks for it; a release build looks next to
-`reshot.exe`, in an `ffmpeg` folder beside it, in `%AppData%\reshot\ffmpeg`, then on `PATH`.
+`build/ffmpeg`, where a debug build can use it. A release build accepts only `ffmpeg.exe`
+beside `reshot.exe`. AppData, PATH and neighbouring subdirectories are never searched.
+Before execution, the file must match the SHA-256 embedded from `build/ffmpeg.sha256`.
+The verified file and its parent directories stay locked while FFmpeg is running; concurrent
+encoder probes share that verification. No FFmpeg process is launched on a verification error.
+
+Administrator mode requires an all-users installation under Program Files with a trusted
+owner and restrictive ACLs on the installation directories and executables. Developer and
+portable copies outside that location must run unelevated.
 
 ## Running next to an installed Reshot
 

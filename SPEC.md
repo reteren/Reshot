@@ -334,6 +334,15 @@ The interface is English only, with a fixed dark theme.
   elevated at logon without prompting every time: permission is given once, when the task
   is created. The two are mutually exclusive, or Reshot would be started twice. Declining
   the prompt falls back to the plain lane and the setting is corrected to match.
+- Administrator startup requires an all-users installation under Program Files. The
+  installation directories and executables must have trusted owners and must not grant
+  modification rights to ordinary users. Links and unsupported ACL forms are refused.
+  The same check protects manually elevated launches, before settings are loaded.
+- Release recording launches only the bundled `ffmpeg.exe` beside `reshot.exe`. It must
+  match the SHA-256 embedded at build time. File and directory handles prevent modification
+  or path replacement while FFmpeg runs. Missing or modified copies block recording;
+  AppData and PATH are never used as fallbacks. Debug builds may use the repository's pinned
+  FFmpeg under the same integrity checks.
 
 ## 17. Deliberately out of scope
 

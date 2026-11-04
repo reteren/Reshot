@@ -17,6 +17,7 @@ use windows::Win32::System::Registry::{
     HKEY, HKEY_CURRENT_USER, KEY_READ, KEY_WRITE, REG_SZ, RegCloseKey, RegCreateKeyExW, RegDeleteValueW,
     RegOpenKeyExW, RegQueryValueExW, RegSetValueExW, REG_OPTION_NON_VOLATILE,
 };
+use windows::Win32::System::SystemInformation::GetSystemDirectoryW;
 use windows::Win32::System::Threading::{
     GetCurrentProcess, GetExitCodeProcess, OpenProcessToken, WaitForSingleObject,
 };
@@ -128,6 +129,13 @@ fn apply_run_key(enabled: bool) {
 // ---- elevated lane: scheduled task ----------------------------------------------------
 
 fn ensure_task(allow_prompt: bool) -> bool {
+    let _installation = match crate::security::trusted_installation() {
+        Ok(installation) => installation,
+        Err(error) => {
+            log::error!("Autostart: administrator mode blocked: {error:#}");
+            return false;
+        }
+    };
     if is_elevated_task_current() {
         return true;
     }
@@ -245,7 +253,7 @@ fn build_task_xml() -> String {
 
 /// Runs schtasks unelevated and returns its stdout on success. Queries need no rights.
 fn run_schtasks(args: &[&str]) -> Option<String> {
-    let out = Command::new("schtasks.exe")
+    let out = Command::new(schtasks_path()?)
         .args(args)
         .creation_flags(CREATE_NO_WINDOW)
         .stdin(Stdio::null())
@@ -282,9 +290,10 @@ fn is_process_elevated() -> bool {
 /// Runs schtasks with administrator rights, asking only if we do not have them yet. Once the
 /// elevated lane is in use Reshot itself starts elevated, so later changes cost no prompt.
 fn run_schtasks_elevated(args: &str) -> bool {
+    let Some(schtasks) = schtasks_path() else { return false };
     if is_process_elevated() {
         log::info!("Autostart: already elevated; running schtasks without a prompt.");
-        let status = Command::new("schtasks.exe")
+        let status = Command::new(&schtasks)
             .raw_arg(args)
             .creation_flags(CREATE_NO_WINDOW)
             .stdin(Stdio::null())
@@ -293,7 +302,7 @@ fn run_schtasks_elevated(args: &str) -> bool {
             .status();
         return status.is_ok_and(|s| s.success());
     }
-    let file = HSTRING::from("schtasks.exe");
+    let file = HSTRING::from(schtasks.as_os_str());
     let params = HSTRING::from(args);
     let mut info = SHELLEXECUTEINFOW {
         cbSize: std::mem::size_of::<SHELLEXECUTEINFOW>() as u32,
@@ -326,6 +335,17 @@ fn run_schtasks_elevated(args: &str) -> bool {
         }
         code == 0
     }
+}
+
+fn schtasks_path() -> Option<PathBuf> {
+    let mut buffer = [0u16; 32768];
+    // SAFETY: Windows fills the bounded buffer; no environment variable or PATH is used.
+    let count = unsafe { GetSystemDirectoryW(Some(&mut buffer)) } as usize;
+    if count == 0 || count >= buffer.len() {
+        log::error!("Autostart: cannot locate the Windows system directory");
+        return None;
+    }
+    Some(PathBuf::from(String::from_utf16_lossy(&buffer[..count])).join("schtasks.exe"))
 }
 
 #[cfg(test)]

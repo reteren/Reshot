@@ -334,6 +334,15 @@ impl SettingsWindow {
         self.status.clear();
     }
     fn toggle(&mut self, key: Toggle) {
+        if matches!(key, Toggle::Elevated)
+            && self.draft.autostart
+            && !self.draft.autostart_elevated
+            && let Err(error) = reshot_platform::security::trusted_installation()
+        {
+            log::warn!("Settings: administrator mode blocked: {error:#}");
+            self.status = "Administrator mode requires an all-users installation in Program Files with protected permissions.".into();
+            return;
+        }
         let d = &mut self.draft;
         match key {
             Toggle::RadialGesture => d.radial.click_to_choose = !d.radial.click_to_choose,

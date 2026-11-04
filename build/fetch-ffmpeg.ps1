@@ -20,7 +20,10 @@ $ErrorActionPreference = 'Stop'
 $FfmpegVersion = 'N-125875-g5d4d3bdc61-20260731 (BtbN autobuild-2026-07-31-14-10)'
 $FfmpegUrl = 'https://github.com/BtbN/FFmpeg-Builds/releases/download/autobuild-2026-07-31-14-10/ffmpeg-N-125875-g5d4d3bdc61-win64-gpl.zip'
 $FfmpegArchiveSha256 = '68a5e966533002785c3e4b9a98327e21d5277802668bf889d94086cb6426cbb4'
-$FfmpegExeSha256 = 'dcec5129f94a0e7338303a9bdb6548889d28238f57e1a2315884946c47fa1c40'
+$FfmpegExeSha256 = (Get-Content -LiteralPath (Join-Path $PSScriptRoot 'ffmpeg.sha256') -Raw).Trim()
+if ($FfmpegExeSha256 -cnotmatch '^[0-9a-f]{64}$') {
+    throw 'build/ffmpeg.sha256 must contain exactly one lowercase SHA-256 digest.'
+}
 
 $outputDirectory = Join-Path $PSScriptRoot 'ffmpeg'
 $outputPath = Join-Path $outputDirectory 'ffmpeg.exe'

@@ -4529,6 +4529,8 @@ dependencies = [
  "anyhow",
  "log",
  "reshot-capture",
+ "sha2 0.10.9",
+ "tempfile",
  "wasapi",
  "windows 0.61.3",
 ]
