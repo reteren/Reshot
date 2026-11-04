@@ -35,14 +35,19 @@ if (-not $Version) {
 }
 Write-Host "reshot $Version" -ForegroundColor Green
 
-# A running copy holds reshot.exe open and the copy below would fail.
-Get-Process 'reshot' -ErrorAction SilentlyContinue | ForEach-Object {
+# Only copies in build output can block this build; an installed copy can keep running.
+$lockedOutputs = @((Join-Path $repo 'target/release/reshot.exe'), (Join-Path $stage 'reshot.exe'))
+Get-Process 'reshot' -ErrorAction SilentlyContinue | Where-Object { $_.Path -in $lockedOutputs } | ForEach-Object {
     Write-Host "Stopping running reshot (pid $($_.Id))"
     Stop-Process -Id $_.Id -Force
 }
 
 Step 'Preparing dist/'
 if (Test-Path $dist) {
+    $resolvedDist = (Resolve-Path -LiteralPath $dist).ProviderPath
+    if ($resolvedDist -ne (Join-Path $repo 'dist') -or (Get-Item -LiteralPath $dist).LinkType) {
+        Fail "Refusing to clean an unexpected or linked output directory: $resolvedDist"
+    }
     Get-ChildItem $dist -Force | Remove-Item -Recurse -Force
     Remove-Item $dist -Force -ErrorAction SilentlyContinue
 }

@@ -69,8 +69,8 @@ dist/
 
 ## Things worth knowing
 
-- **A running application locks its own executable.** The script closes `reshot.exe`
-  before building.
+- **A running application locks its own executable.** The script closes only copies from
+  this repository's build or staging output; a separately installed copy can keep running.
 - **The build is `--locked`.** The lockfile pins what skia-bindings needs to build; the
   release never re-resolves dependencies.
 - **Tests run first.** If they fail, nothing is packaged.
