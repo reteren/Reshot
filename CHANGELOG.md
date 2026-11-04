@@ -3,6 +3,29 @@
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and this
 project adheres to [Semantic Versioning](https://semver.org/).
 
+## [1.3.8] - Unreleased (test build)
+
+### Fixed
+
+- The tray menu opens directly on the shell thread, including the first click after launch,
+  without starting the GPU UI. Native menu tracking handles focus, outside clicks and Escape.
+- The radial menu updates on display frames, with time-based hover easing rather than
+  a coarse input timer. Opening, hovering and closing no longer depend on timer granularity.
+- The settings title bar starts the native Windows drag loop, excluding the close button.
+- Screenshot text remains movable after committing or switching tools. Text and Selection
+  tools can drag it; a double click with Text reopens editing. Erasing, undo, redo and export
+  preserve the annotations, and moving text leaves raster drawings underneath intact.
+- Native Windows Unicode and IME input reaches screenshot text, and paste preserves line breaks.
+
+### Security
+
+- Recording verifies the bundled FFmpeg against an embedded SHA-256 and holds the file
+  and its directories against modification and replacement while it runs. Release builds
+  no longer search AppData or PATH for FFmpeg.
+- Administrator mode requires a protected all-users installation in Program Files, with
+  ownership and ACL checks. The installer now offers this installation mode.
+- Release packaging verifies FFmpeg even when downloading is skipped.
+
 ## [1.3.7] - Unreleased (test build)
 
 ### Changed
