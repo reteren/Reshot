@@ -15,7 +15,8 @@ use windows::Win32::Security::{
     ACCESS_ALLOWED_ACE, ACE_HEADER, ACL, DACL_SECURITY_INFORMATION, EqualSid, GetAce,
     GetTokenInformation, INHERIT_ONLY_ACE, IsValidAcl, IsValidSid, IsWellKnownSid,
     OWNER_SECURITY_INFORMATION, PSECURITY_DESCRIPTOR, PSID, TOKEN_ELEVATION, TOKEN_QUERY,
-    TokenElevation, WinBuiltinAdministratorsSid, WinLocalSystemSid,
+    TOKEN_ELEVATION_TYPE, TokenElevation, TokenElevationType, TokenElevationTypeFull,
+    WinBuiltinAdministratorsSid, WinLocalSystemSid,
 };
 use windows::Win32::Storage::FileSystem::{
     FILE_ATTRIBUTE_REPARSE_POINT, FILE_FLAG_BACKUP_SEMANTICS, FILE_FLAG_OPEN_REPARSE_POINT,
@@ -62,9 +63,34 @@ pub fn is_process_elevated() -> Result<bool> {
     }
 }
 
-/// A normal launch is unrestricted; an elevated launch fails closed before loading settings.
+/// Whether this token is the elevated half of a UAC split token. With UAC turned off, or for
+/// the built-in Administrator without Admin Approval Mode, every process the user starts is
+/// elevated: the type is `Default`, and there is no unelevated side to protect.
+fn is_split_token_elevated() -> Result<bool> {
+    // SAFETY: a correctly sized token query; the handle is closed on both outcomes.
+    unsafe {
+        let mut token = HANDLE::default();
+        OpenProcessToken(GetCurrentProcess(), TOKEN_QUERY, &mut token)?;
+        let mut kind = TOKEN_ELEVATION_TYPE::default();
+        let mut size = 0;
+        let result = GetTokenInformation(
+            token,
+            TokenElevationType,
+            Some(&mut kind as *mut _ as *mut _),
+            std::mem::size_of::<TOKEN_ELEVATION_TYPE>() as u32,
+            &mut size,
+        );
+        let _ = CloseHandle(token);
+        result?;
+        Ok(kind == TokenElevationTypeFull)
+    }
+}
+
+/// A normal launch is unrestricted; a launch elevated past UAC fails closed before loading
+/// settings unless the binaries are protected from the unelevated user. Without UAC there is
+/// no such boundary, so a per-user installation starts as it would anywhere else.
 pub fn guard_elevated_startup() -> Result<Option<TrustedInstallation>> {
-    if is_process_elevated()? {
+    if is_process_elevated()? && is_split_token_elevated()? {
         Ok(Some(trusted_installation()?))
     } else {
         Ok(None)
