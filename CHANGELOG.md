@@ -3,6 +3,13 @@
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and this
 project adheres to [Semantic Versioning](https://semver.org/).
 
+## [1.3.9] - Unreleased (test build)
+
+### Fixed
+
+- Shift opens and closes the tool settings while typing screenshot text. A bare tap toggles
+  them on release, and Shift held with a letter still types a capital.
+
 ## [1.3.8] - Unreleased (test build)
 
 ### Fixed

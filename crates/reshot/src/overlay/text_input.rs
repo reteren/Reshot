@@ -24,12 +24,14 @@ impl EntityInputHandler for Overlay {
     fn unmark_text(&mut self, _: &mut Window, _: &mut Context<Self>) { self.editor.unmark_text(); }
 
     fn replace_text_in_range(&mut self, range: Option<Range<usize>>, text: &str, _: &mut Window, cx: &mut Context<Self>) {
+        self.cancel_shift_tap();
         if self.editor.is_typing() && !self.panel.has_field() {
             self.with_live(cx, |this| this.editor.replace_native_text(range, text, false));
         }
     }
 
     fn replace_and_mark_text_in_range(&mut self, range: Option<Range<usize>>, text: &str, _: Option<Range<usize>>, _: &mut Window, cx: &mut Context<Self>) {
+        self.cancel_shift_tap();
         if self.editor.is_typing() && !self.panel.has_field() {
             self.with_live(cx, |this| this.editor.replace_native_text(range, text, true));
         }

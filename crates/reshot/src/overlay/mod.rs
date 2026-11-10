@@ -111,6 +111,9 @@ pub struct Overlay {
     /// Last cursor position in frame pixels, for the brush ring.
     cursor: Option<SkPoint>,
     shift_down: bool,
+    /// Shift went down on its own while typing and nothing else happened yet: releasing it
+    /// toggles the tool settings, while Shift+letter stays a capital.
+    shift_tap: bool,
 
     pub(crate) flyout: Option<FlyoutState>,
     /// A flyout fading out after being closed, and when it started to.
@@ -206,6 +209,7 @@ impl Overlay {
                         ctrl_a: CtrlA::None,
                         cursor: None,
                         shift_down: false,
+                        shift_tap: false,
                         flyout: None,
                         closing_flyout: None,
                         flyout_hovered: false,
@@ -423,6 +427,7 @@ impl Overlay {
 
     fn on_left_down(&mut self, e: &MouseDownEvent, window: &mut Window, cx: &mut Context<Self>) {
         let p = self.to_frame(e.position);
+        self.cancel_shift_tap();
         self.notice = None;
         self.close_flyout();
         self.source_menu = None;
@@ -671,6 +676,7 @@ impl Overlay {
         let k = &e.keystroke;
         let ctrl = k.modifiers.control;
         let key = k.key.as_str();
+        self.cancel_shift_tap();
 
         // A focused text field in the panel owns its keys.
         if let Some(tool) = self.tool()
@@ -766,13 +772,31 @@ impl Overlay {
     fn on_modifiers(&mut self, e: &ModifiersChangedEvent, cx: &mut Context<Self>) {
         // Shift toggles the tool settings while drawing (SPEC §6.5), but not as part of a
         // chord such as Ctrl+Shift+Z.
-        let pressed = e.modifiers.shift && !self.shift_down;
-        self.shift_down = e.modifiers.shift;
-        // Shift is a plain modifier while typing into the text, the hex field or the font search.
+        let m = e.modifiers;
+        let pressed = m.shift && !self.shift_down;
+        let released = !m.shift && self.shift_down;
+        self.shift_down = m.shift;
+        let chord = m.control || m.alt || m.platform;
+        // While typing into the text, the hex field or the font search Shift also makes
+        // capitals and extends selections, so there it toggles on a bare tap: on release,
+        // when no key, click or other modifier came in between.
         let typing = self.editor.is_typing() || self.panel.has_field();
-        if pressed && !e.modifiers.control && self.mode != Mode::Select && !typing {
+        if pressed && !chord && self.mode != Mode::Select {
+            if typing {
+                self.shift_tap = true;
+            } else {
+                self.toggle_panel(cx);
+            }
+        } else if released && std::mem::take(&mut self.shift_tap) && !chord {
             self.toggle_panel(cx);
+        } else if chord {
+            self.shift_tap = false;
         }
+    }
+
+    /// Anything typed or clicked while Shift is held makes it a modifier, not a tap.
+    pub(crate) fn cancel_shift_tap(&mut self) {
+        self.shift_tap = false;
     }
 
     pub(crate) fn toggle_panel(&mut self, cx: &mut Context<Self>) {
