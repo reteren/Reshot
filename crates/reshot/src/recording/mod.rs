@@ -5,6 +5,7 @@ mod corners;
 mod hud;
 mod track_prompt;
 
+use reshot_core::i18n::{tr, trf};
 use std::collections::HashMap;
 use std::fs;
 use std::path::PathBuf;
@@ -94,8 +95,8 @@ pub fn start_video_with(
         log::error!("Recording unavailable: {}", Ffmpeg::missing_message());
         app::balloon(
             cx,
-            "Reshot: recording unavailable",
-            &Ffmpeg::missing_message(),
+            tr("Reshot: recording unavailable"),
+            tr("The bundled ffmpeg.exe is missing. Reinstall Reshot to restore screen and audio recording."),
             BalloonIcon::Error,
         );
         return;
@@ -111,8 +112,8 @@ pub fn start_video_with(
         log::error!("Recording folder: {error}");
         app::balloon(
             cx,
-            "Reshot: recording unavailable",
-            &format!("Cannot create recording folder: {error}"),
+            tr("Reshot: recording unavailable"),
+            &trf("Cannot create recording folder: {error}", &[("error", &error.to_string())]),
             BalloonIcon::Error,
         );
         return;
@@ -177,8 +178,8 @@ pub fn start_audio(cx: &mut App, sources: AudioSources) {
         log::error!("Audio recording unavailable: {}", Ffmpeg::missing_message());
         app::balloon(
             cx,
-            "Reshot: audio unavailable",
-            &Ffmpeg::missing_message(),
+            tr("Reshot: audio unavailable"),
+            tr("The bundled ffmpeg.exe is missing. Reinstall Reshot to restore screen and audio recording."),
             BalloonIcon::Error,
         );
         return;
@@ -193,8 +194,8 @@ pub fn start_audio(cx: &mut App, sources: AudioSources) {
         log::error!("Audio recording folder: {error}");
         app::balloon(
             cx,
-            "Reshot: audio unavailable",
-            &format!("Cannot create recording folder: {error}"),
+            tr("Reshot: audio unavailable"),
+            &trf("Cannot create recording folder: {error}", &[("error", &error.to_string())]),
             BalloonIcon::Error,
         );
         return;
@@ -270,8 +271,8 @@ fn complete_start(cx: &mut App, serial: u64) -> bool {
                 let hotkey = cx.global::<ReshotApp>().settings.current().hotkey.clone();
                 app::balloon(
                     cx,
-                    "Reshot: recording",
-                    &format!("Recording started. Press {hotkey} to stop."),
+                    tr("Reshot: recording"),
+                    &trf("Recording started. Press {hotkey} to stop.", &[("hotkey", &hotkey)]),
                     BalloonIcon::Info,
                 );
                 state(cx).active = Some(Active::Video {
@@ -283,7 +284,7 @@ fn complete_start(cx: &mut App, serial: u64) -> bool {
                 log::error!("Recording failed to start: {error:#}");
                 app::balloon(
                     cx,
-                    "Reshot: recording failed",
+                    tr("Reshot: recording failed"),
                     &format!("{error:#}"),
                     BalloonIcon::Error,
                 );
@@ -292,8 +293,8 @@ fn complete_start(cx: &mut App, serial: u64) -> bool {
                 log::error!("Recording startup worker terminated unexpectedly");
                 app::balloon(
                     cx,
-                    "Reshot: recording failed",
-                    "Recording startup worker terminated unexpectedly.",
+                    tr("Reshot: recording failed"),
+                    tr("Recording startup worker terminated unexpectedly."),
                     BalloonIcon::Error,
                 );
             }
@@ -315,7 +316,7 @@ fn complete_start(cx: &mut App, serial: u64) -> bool {
         }) if id == serial => match receiver.try_recv() {
             Ok(Ok(recorder)) if stop_requested => finish_audio(cx, recorder),
             Ok(Ok(recorder)) => {
-                let hud = HudWindows::open("Audio".into(), None, "#FF0000", 1.0, cx);
+                let hud = HudWindows::open(tr("Audio").into(), None, "#FF0000", 1.0, cx);
                 log::info!("Audio recording started: {}", recorder.path.display());
                 let settings = cx.global::<ReshotApp>().settings.current();
                 let hotkey = if settings.audio_hotkey.is_empty() {
@@ -325,8 +326,8 @@ fn complete_start(cx: &mut App, serial: u64) -> bool {
                 };
                 app::balloon(
                     cx,
-                    "Reshot: audio recording",
-                    &format!("Audio recording started. Press {hotkey} to stop."),
+                    tr("Reshot: audio recording"),
+                    &trf("Audio recording started. Press {hotkey} to stop.", &[("hotkey", &hotkey)]),
                     BalloonIcon::Info,
                 );
                 state(cx).active = Some(Active::Audio {
@@ -338,7 +339,7 @@ fn complete_start(cx: &mut App, serial: u64) -> bool {
                 log::error!("Audio recording failed to start: {error:#}");
                 app::balloon(
                     cx,
-                    "Reshot: audio recording failed",
+                    tr("Reshot: audio recording failed"),
                     &format!("{error:#}"),
                     BalloonIcon::Error,
                 );
@@ -347,8 +348,8 @@ fn complete_start(cx: &mut App, serial: u64) -> bool {
                 log::error!("Audio startup worker terminated unexpectedly");
                 app::balloon(
                     cx,
-                    "Reshot: audio recording failed",
-                    "Recording startup worker terminated unexpectedly.",
+                    tr("Reshot: audio recording failed"),
+                    tr("Recording startup worker terminated unexpectedly."),
                     BalloonIcon::Error,
                 );
             }
@@ -459,7 +460,7 @@ fn finish_video(cx: &App, mut recorder: Box<VideoRecorder>, keep_system: bool, k
             log::info!("Recording saved: {}", recorder.path.display());
             app::balloon(
                 cx,
-                "Reshot: recording saved",
+                tr("Reshot: recording saved"),
                 &recorder.path.display().to_string(),
                 BalloonIcon::Info,
             );
@@ -468,7 +469,7 @@ fn finish_video(cx: &App, mut recorder: Box<VideoRecorder>, keep_system: bool, k
             log::error!("Recording could not be saved: {}", recorder.path.display());
             app::balloon(
                 cx,
-                "Reshot: recording save failed",
+                tr("Reshot: recording save failed"),
                 &recorder.path.display().to_string(),
                 BalloonIcon::Error,
             );
@@ -477,7 +478,7 @@ fn finish_video(cx: &App, mut recorder: Box<VideoRecorder>, keep_system: bool, k
             log::error!("Recording save failed: {error:#}");
             app::balloon(
                 cx,
-                "Reshot: recording save failed",
+                tr("Reshot: recording save failed"),
                 &format!("{error:#}"),
                 BalloonIcon::Error,
             );
@@ -491,7 +492,7 @@ fn finish_audio(cx: &App, mut recorder: AudioRecorder) {
             log::info!("Audio recording saved: {}", recorder.path.display());
             app::balloon(
                 cx,
-                "Reshot: audio saved",
+                tr("Reshot: audio saved"),
                 &recorder.path.display().to_string(),
                 BalloonIcon::Info,
             );
@@ -500,7 +501,7 @@ fn finish_audio(cx: &App, mut recorder: AudioRecorder) {
             log::error!("Audio recording save failed: {error:#}");
             app::balloon(
                 cx,
-                "Reshot: audio save failed",
+                tr("Reshot: audio save failed"),
                 &format!("{error:#}"),
                 BalloonIcon::Error,
             );

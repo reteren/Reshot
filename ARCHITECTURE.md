@@ -112,6 +112,46 @@ previews Cyrillic perfectly and then draws it as empty boxes on the image. That 
 is why `FontEntry` carries `supports_cyrillic` and why the picker dims those rows — the
 preview cannot be trusted to show the failure by itself.
 
+### Interface language
+
+`reshot-core/src/i18n.rs` holds the language table and the lookup. Every user-facing string
+is written in English in the source and passed through `tr("…")`, or `trf("…", &[(name,
+value)])` when it has `{named}` placeholders; the English text is the key into
+`reshot-core/locales/<code>.json`. A missing key falls back to English. A test scans the
+workspace for those calls and fails if any locale misses a key, keeps an unused one, loses a
+placeholder or drops a menu mnemonic, so a new string cannot ship untranslated.
+
+The language is process-wide: the `language` setting, empty meaning the first Windows display
+language the table knows (`GetUserPreferredUILanguages`), English otherwise. It is applied
+before the elevation guard (which reads no settings, so it follows Windows), again after the
+settings load, and whenever they are saved; open windows pick it up on their next frame and
+the tray menu rewrites its items before it next opens, which also makes Windows measure them
+again. Debug builds take `--lang=<code>` to look at a language without touching the settings
+file the installed copy shares.
+
+Paragraphs in the settings dialog are broken by hand (`vgui::wrapped`), so Chinese and
+Japanese, which have no spaces, get a break opportunity between any two ideographs, except
+before closing and after opening punctuation.
+
+### Text recognition
+
+`Windows.Media.Ocr` has no confidence score and one recognizer per language, so AUTO runs
+every installed recognizer in turn and merges their lines. The order is the interface
+language's recognizers, then English, then the user's other display languages, then the
+rest of what is installed. The first two report at once and the overlay shows their merge;
+the others follow in the background and replace it only if they change something, keeping
+the user's selection when they do not. Recognizers run one after another, never side by
+side: each holds its own working memory, so the peak stays that of one pass (measured: 30
+engines alive cost under 20 MB extra, while the upscaled image of a full screen costs
+about 260 MB).
+
+The merge trusts scripts, not languages. A recognizer for a non-Latin script writes Latin
+when it sees Latin, so a line where its own script does not lose to Latin is its claim.
+Claims win, the one with the most letters of its own script taking it and a tie within 15 %
+going to the more likely language; a line nobody claims is Latin and takes the most likely
+Latin recognizer's reading. With Russian and English this is exactly the earlier RU+EN
+merge, in either order.
+
 ## 4. Soft strokes: hardness and coverage
 
 Brush, blur, pixelation and the three erasers share one stroke model, taken from hive

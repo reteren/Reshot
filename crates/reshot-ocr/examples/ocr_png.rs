@@ -1,17 +1,19 @@
 use std::{fs::File, io::BufReader};
 
 use anyhow::{Context, Result, bail};
-use reshot_ocr::{OcrLanguage, recognize};
+use reshot_ocr::{OcrMode, recognize};
 
 fn main() -> Result<()> {
     let path = std::env::args_os()
         .nth(1)
-        .context("usage: ocr_png <image.png> [auto|ru|en]")?;
+        .context("usage: ocr_png <image.png> [auto|<tag>] [priority tags...]")?;
+    // `auto` (the default) runs every installed recognizer; a tag such as `ru` or `en-US`
+    // runs only that one. Further arguments are the AUTO priority, as the interface passes it.
     let mode = match std::env::args().nth(2).as_deref() {
-        Some("ru") => OcrLanguage::Ru,
-        Some("en") => OcrLanguage::En,
-        _ => OcrLanguage::Auto,
+        None | Some("auto") => OcrMode::Auto,
+        Some(tag) => OcrMode::Language(tag.to_string()),
     };
+    let priority: Vec<String> = std::env::args().skip(3).collect();
     let mut decoder = png::Decoder::new(BufReader::new(File::open(&path)?));
     decoder.set_transformations(png::Transformations::EXPAND | png::Transformations::STRIP_16);
     let mut reader = decoder.read_info()?;
@@ -47,7 +49,8 @@ fn main() -> Result<()> {
         info.width,
         info.height,
         info.width as usize * 4,
-        mode,
+        &mode,
+        &priority,
     );
     for line in &lines {
         println!(

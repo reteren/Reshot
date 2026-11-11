@@ -22,6 +22,8 @@ macro_rules! section {
 }
 
 section!(AppSettings {
+    /// Interface language code (`i18n::LANGUAGES`). Empty follows the Windows display language.
+    language: String = String::new(),
     /// Main global hotkey. Default is Print Screen.
     hotkey: String = "PrtScn".into(),
     /// Optional global hotkey for instant audio recording. Empty = off.

@@ -1,5 +1,6 @@
 //! Modeless VGUI panel for keeping either, both, or neither recorded audio track.
 
+use reshot_core::i18n::tr;
 use gpui::{
     App, AppContext, Context, FocusHandle, Focusable, FontWeight, InteractiveElement, IntoElement,
     KeyDownEvent, ParentElement, Render, StatefulInteractiveElement, Styled, Window, WindowHandle,
@@ -130,7 +131,7 @@ impl Render for TrackPrompt {
     /// Built from the settings dialog's controls (`settings_window::vgui`), so the face, the
     /// bold caption, the close glyph, the checkboxes and the button match it exactly.
     fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        let system = vgui::checkbox("keep-system", self.keep_system, "System audio", self.has_system).on_click(
+        let system = vgui::checkbox("keep-system", self.keep_system, tr("System audio"), self.has_system).on_click(
             cx.listener(|this, _, _, cx| {
                 if this.has_system {
                     this.keep_system = !this.keep_system;
@@ -138,7 +139,7 @@ impl Render for TrackPrompt {
                 }
             }),
         );
-        let mic = vgui::checkbox("keep-mic", self.keep_mic, "Microphone", self.has_mic).on_click(cx.listener(
+        let mic = vgui::checkbox("keep-mic", self.keep_mic, tr("Microphone"), self.has_mic).on_click(cx.listener(
             |this, _, _, cx| {
                 if this.has_mic {
                     this.keep_mic = !this.keep_mic;
@@ -146,7 +147,7 @@ impl Render for TrackPrompt {
                 }
             },
         ));
-        let never = vgui::checkbox("never-ask", self.never_ask, "Never show this again", true).on_click(
+        let never = vgui::checkbox("never-ask", self.never_ask, tr("Never show this again"), true).on_click(
             cx.listener(|this, _, _, cx| {
                 this.never_ask = !this.never_ask;
                 cx.notify();
@@ -185,7 +186,7 @@ impl Render for TrackPrompt {
                             .text_size(px(10.))
                             .line_height(px(12.5))
                             .font_weight(FontWeight::BOLD)
-                            .child("AUDIO TRACKS"),
+                            .child(tr("AUDIO TRACKS")),
                     )
                     .child(
                         div()
@@ -198,14 +199,14 @@ impl Render for TrackPrompt {
                             .on_click(cx.listener(|this, _, window, cx| this.decide(window, cx))),
                     ),
             )
-            .child(vgui::text(12., vgui::LINE).child("Which audio do you want to keep?"))
+            .child(vgui::text(12., vgui::LINE).child(tr("Which audio do you want to keep?")))
             .child(div().flex().flex_col().gap(px(8.)).child(system).child(mic))
             .child(theme::separator())
             .child(never)
             .child(
                 // Pinned to the bottom: any spare height goes above it, not below.
                 div().flex_1().flex().items_end().justify_end().child(
-                    vgui::button("save-tracks", "Save", false, false)
+                    vgui::button("save-tracks", tr("Save"), false, false)
                         .on_click(cx.listener(|this, _, window, cx| this.decide(window, cx))),
                 ),
             )

@@ -12,24 +12,31 @@ mod settings_window;
 mod theme;
 mod winutil;
 
+use reshot_core::i18n::{self, tr, trf};
 use reshot_core::settings::SettingsService;
 use reshot_platform::shell::Shell;
 use reshot_platform::single_instance::SingleInstance;
 
 fn main() {
+    // The display language is known before any setting is read, so even the refusal below
+    // speaks the user's language.
+    i18n::set_system_languages(reshot_platform::win::preferred_ui_languages());
+    i18n::apply("");
     // Refuse unsafe elevated copies before reading user-controlled settings or starting
     // workers. Keep the installation handles pinned for the full application lifetime.
     let _installation = match reshot_platform::security::guard_elevated_startup() {
         Ok(installation) => installation,
         Err(error) => {
-            let message = windows::core::HSTRING::from(format!(
-                "Reshot cannot start safely as administrator.\n\nInstall it for all users in Program Files, or launch it without administrator rights.\n\n{error:#}"
+            let message = windows::core::HSTRING::from(trf(
+                "Reshot cannot start safely as administrator.\n\nInstall it for all users in Program Files, or launch it without administrator rights.\n\n{error}",
+                &[("error", &format!("{error:#}"))],
             ));
+            let title = windows::core::HSTRING::from(tr("Reshot: administrator mode blocked"));
             unsafe {
                 windows::Win32::UI::WindowsAndMessaging::MessageBoxW(
                     None,
                     &message,
-                    windows::core::w!("Reshot: administrator mode blocked"),
+                    &title,
                     windows::Win32::UI::WindowsAndMessaging::MB_OK
                         | windows::Win32::UI::WindowsAndMessaging::MB_ICONERROR,
                 );
@@ -59,6 +66,13 @@ fn main() {
     };
     let mut settings = SettingsService::default();
     let s = settings.load().clone();
+    // `--lang=<code>` (debug builds) shows the interface in another language without touching
+    // the settings file the installed copy shares.
+    let lang_override = std::env::args()
+        .filter(|_| cfg!(debug_assertions))
+        .find_map(|a| a.strip_prefix("--lang=").map(str::to_string));
+    i18n::apply(lang_override.as_deref().unwrap_or(&s.language));
+    log::info!("Startup: interface language {}.", i18n::current().code);
     let main_vk = app::register_startup_hotkeys(&shell, &s);
 
     // Off the main thread: schtasks queries and the WinRT access request are slow.

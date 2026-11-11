@@ -1,6 +1,7 @@
 //! Writing results to disk. The pixels come from `reshot_core::export`; this only decides
 //! where they go.
 
+use reshot_core::i18n::tr;
 use anyhow::Result;
 use std::path::PathBuf;
 
@@ -44,11 +45,11 @@ pub async fn ask_save_path(settings: &AppSettings, parent: Option<isize>) -> Opt
     let format = ImageFormat::parse(&settings.format.image);
     let name = filename::build(&settings.filename.template, format.extension(), chrono_now());
     let mut dialog = rfd::AsyncFileDialog::new()
-        .set_title("Save screenshot")
+        .set_title(tr("Save screenshot"))
         .set_directory(screenshot_dir(settings))
         .set_file_name(name);
     // The settings' format is offered first, so it is the default filter.
-    let filters = [(ImageFormat::Png, "PNG image"), (ImageFormat::Jpg, "JPEG image"), (ImageFormat::Webp, "WebP image")];
+    let filters = [(ImageFormat::Png, tr("PNG image")), (ImageFormat::Jpg, tr("JPEG image")), (ImageFormat::Webp, tr("WebP image"))];
     let first = filters.iter().position(|(f, _)| *f == format).unwrap_or(0);
     for i in (first..filters.len()).chain(0..first) {
         let (f, label) = filters[i];

@@ -7,6 +7,7 @@ use std::time::{Duration, Instant};
 use gpui::{App, AppContext, AsyncApp, Global, WindowHandle};
 use reshot_capture::ScreenCaptureService;
 use reshot_core::hotkey::HotkeyDefinition;
+use reshot_core::i18n::{tr, trf};
 use reshot_core::session::{SessionState, SessionStateMachine};
 use reshot_core::settings::{AppSettings, SettingsService};
 use reshot_platform::shell::{BalloonIcon, HotkeySlot, Shell, ShellEvent};
@@ -64,8 +65,8 @@ fn register_main(shell: &Shell, text: &str) -> u32 {
             if let Err(e) = shell.register_hotkey(HotkeySlot::Main, &def) {
                 log::error!("{e}");
                 shell.show_balloon(
-                    "Reshot: hotkey unavailable",
-                    &format!("Could not register '{text}'. It may be in use by another app. Pick another in Settings."),
+                    tr("Reshot: hotkey unavailable"),
+                    &trf("Could not register '{hotkey}'. It may be in use by another app. Pick another in Settings.", &[("hotkey", text)]),
                     BalloonIcon::Warning,
                 );
             }
@@ -281,7 +282,7 @@ fn on_shell_event(event: ShellEvent, cx: &mut App) {
         ShellEvent::TrayQuit => quit(cx),
         ShellEvent::SecondInstance => {
             log::info!("SingleInstance: another launch was redirected here.");
-            balloon(cx, "Reshot is already running", "It lives in the tray.", BalloonIcon::Info);
+            balloon(cx, tr("Reshot is already running"), tr("It lives in the tray."), BalloonIcon::Info);
         }
     }
 }
@@ -417,7 +418,7 @@ pub fn capture(cx: &mut App, source: &'static str) {
                 Err(e) => {
                     log::error!("Capture failed: {e:#}");
                     app.session.reset();
-                    app.shell.show_balloon("Reshot: capture failed", &format!("{e}"), BalloonIcon::Error);
+                    app.shell.show_balloon(tr("Reshot: capture failed"), &format!("{e}"), BalloonIcon::Error);
                 }
             }
         });
@@ -437,12 +438,12 @@ pub fn set_paused(cx: &mut App, paused: bool) {
     app.shell.set_paused(paused);
     if paused {
         app.shell.unregister_hotkey(HotkeySlot::Main);
-        app.shell.show_balloon("Reshot", "Hotkey paused.", BalloonIcon::Info);
+        app.shell.show_balloon("Reshot", tr("Hotkey paused."), BalloonIcon::Info);
         log::info!("Hotkey paused by user.");
     } else {
         let hotkey = app.settings.current().hotkey.clone();
         app.register_main_hotkey(&hotkey);
-        app.shell.show_balloon("Reshot", "Hotkey resumed.", BalloonIcon::Info);
+        app.shell.show_balloon("Reshot", tr("Hotkey resumed."), BalloonIcon::Info);
         log::info!("Hotkey resumed by user.");
     }
 }
@@ -452,6 +453,10 @@ pub fn apply_settings(cx: &mut App, updated: AppSettings) {
     let app = cx.global_mut::<ReshotApp>();
     let old = app.settings.current().clone();
     app.settings.update(updated.clone());
+    if old.language != updated.language {
+        reshot_core::i18n::apply(&updated.language);
+        log::info!("Settings: interface language {}.", reshot_core::i18n::current().code);
+    }
     if !old.audio_hotkey.eq_ignore_ascii_case(&updated.audio_hotkey) {
         app.register_audio_hotkey(&updated.audio_hotkey);
     }
@@ -479,8 +484,8 @@ pub fn apply_settings(cx: &mut App, updated: AppSettings) {
             app.settings.save();
             if !elevated {
                 app.shell.show_balloon(
-                    "Reshot: starting normally",
-                    "Administrator startup was not enabled. It requires a protected all-users installation in Program Files and Windows permission. Reshot will start normally.",
+                    tr("Reshot: starting normally"),
+                    tr("Administrator startup was not enabled. It requires a protected all-users installation in Program Files and Windows permission. Reshot will start normally."),
                     BalloonIcon::Warning,
                 );
             }

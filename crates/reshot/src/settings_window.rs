@@ -9,6 +9,7 @@ use gpui::{
     ScrollHandle, Window, WindowBackgroundAppearance, WindowBounds, WindowHandle, WindowKind, WindowOptions,
 };
 use reshot_core::hotkey::HotkeyDefinition;
+use reshot_core::i18n::{self, tr};
 use reshot_core::settings::AppSettings;
 use reshot_platform::win::{self, PxRect};
 use std::cell::Cell;
@@ -56,9 +57,10 @@ impl Tab {
         Self::Info,
     ];
     fn from_name(name: &str) -> Option<Self> {
-        Self::ALL.into_iter().find(|t| t.label().eq_ignore_ascii_case(name))
+        Self::ALL.into_iter().find(|t| t.name().eq_ignore_ascii_case(name))
     }
-    fn label(self) -> &'static str {
+    /// The tab's English name, which `--settings=<tab>` matches.
+    fn name(self) -> &'static str {
         match self {
             Self::General => "General",
             Self::Overlay => "Overlay",
@@ -66,6 +68,16 @@ impl Tab {
             Self::Video => "Video",
             Self::Audio => "Audio",
             Self::Info => "Info",
+        }
+    }
+    fn label(self) -> &'static str {
+        match self {
+            Self::General => tr("General"),
+            Self::Overlay => tr("Overlay"),
+            Self::Output => tr("Output"),
+            Self::Video => tr("Video"),
+            Self::Audio => tr("Audio"),
+            Self::Info => tr("Info"),
         }
     }
 }
@@ -106,6 +118,7 @@ enum Select {
     Format,
     Fps,
     Mic,
+    Language,
 }
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum Popover {
@@ -277,7 +290,7 @@ impl SettingsWindow {
         // Re-read: the app fills empty folders with their defaults.
         self.draft = cx.global::<ReshotApp>().settings.current().clone();
         self.saved = self.draft.clone();
-        self.status = "Saved.".into();
+        self.status = tr("Saved.").into();
         cx.notify();
     }
     fn close(&mut self, window: &mut Window) {
@@ -340,7 +353,7 @@ impl SettingsWindow {
             && let Err(error) = reshot_platform::security::trusted_installation()
         {
             log::warn!("Settings: administrator mode blocked: {error:#}");
-            self.status = "Administrator mode requires an all-users installation in Program Files with protected permissions.".into();
+            self.status = tr("Administrator mode requires an all-users installation in Program Files with protected permissions.").into();
             return;
         }
         let d = &mut self.draft;
@@ -432,9 +445,15 @@ impl SettingsWindow {
                 .into_iter()
                 .map(|(a, b)| (a.into(), b.into()))
                 .collect(),
-            Select::Mic => std::iter::once(("default".into(), "System default".into()))
+            Select::Mic => std::iter::once(("default".into(), tr("System default").into()))
                 .chain(self.mics.iter().cloned())
                 .collect(),
+            Select::Language => {
+                let system = i18n::LANGUAGES[i18n::resolve("", i18n::system_languages())].native;
+                std::iter::once((String::new(), format!("{} ({system})", tr("System language"))))
+                    .chain(i18n::LANGUAGES.iter().map(|l| (l.code.to_string(), l.native.to_string())))
+                    .collect()
+            }
         }
     }
     fn selected(&self, key: Select) -> String {
@@ -442,6 +461,7 @@ impl SettingsWindow {
             Select::Format => self.draft.format.image.clone(),
             Select::Fps => self.draft.video.fps.to_string(),
             Select::Mic => self.draft.audio.mic_device.clone(),
+            Select::Language => self.draft.language.clone(),
         }
     }
     fn set_selected(&mut self, key: Select, value: String) {
@@ -452,6 +472,7 @@ impl SettingsWindow {
                 self.draft.audio.mic_device = value.clone();
                 self.draft.video.audio.mic_device = value;
             }
+            Select::Language => self.draft.language = value,
         }
         self.status.clear();
         self.popover = None;
@@ -575,7 +596,7 @@ impl SettingsWindow {
     fn browse(&mut self, field: Field, cx: &mut Context<Self>) {
         let current = self.text(field).to_string();
         let dialog = rfd::AsyncFileDialog::new()
-            .set_title("Choose folder")
+            .set_title(tr("Choose folder"))
             .set_directory(current);
         cx.spawn(async move |view, cx| {
             if let Some(folder) = dialog.pick_folder().await {

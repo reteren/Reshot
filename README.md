@@ -16,7 +16,9 @@ selection: rectangle, ellipse, triangle, lasso, polygon, several at once with ct
 
 drawing: brush, shapes, lines and arrows, text in any installed font, blur and pixelation, three erasers, eyedropper and a full colour picker, 32 steps of undo. drag text to move it; double-click it with the text tool to edit it
 
-text: recognised words can be selected right over the frozen screen and copied. it works offline through the windows engine, and auto mode reads russian and english together
+text: recognised words can be selected right over the frozen screen and copied. it works offline through the windows engine in any language windows has an ocr pack for. auto mode reads the interface language and english first and shows them right away, then checks the other installed languages
+
+languages: the interface comes in 30 languages, all of europe plus chinese, japanese and korean, and follows the windows language unless you pick one in settings
 
 recording: mp4 of any shape, system sound and mic go to separate tracks so you choose what to keep after you stop, sound from a single app, and a separate audio only recorder
 
@@ -32,7 +34,7 @@ everything outside a non rectangular selection stays transparent, in the clipboa
 - the installer is around 48 mb because ffmpeg is inside. ffmpeg is gpl, reshot is mit, details in [THIRD-PARTY-NOTICES.md](THIRD-PARTY-NOTICES.md)
 - it can't come up over a program running as admin, windows doesn't let a normal process do that. for that there's a "start with windows as administrator" checkbox in settings, available after installing for all users in protected Program Files
 - monitors with different dpi scaling aren't supported yet
-- sound from a single app needs windows 11, russian text recognition needs the russian ocr pack in windows language settings
+- sound from a single app needs windows 11. text recognition in a language needs that language's ocr pack in windows language settings
 
 ## install
 

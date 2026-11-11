@@ -19,6 +19,7 @@ mod toolbar;
 mod view;
 mod text_input;
 
+use reshot_core::i18n::{tr, trf};
 use std::sync::Arc;
 use std::time::Instant;
 
@@ -915,10 +916,11 @@ impl Overlay {
                             None => None,
                         };
                         this.notice = Some(match holder {
-                            Some(h) => {
-                                format!("Clipboard is held by {h} — copy failed. Ctrl+S saves to a file instead, Esc cancels.")
-                            }
-                            None => "Clipboard is busy — copy failed. Ctrl+S saves to a file instead, Esc cancels.".into(),
+                            Some(h) => trf(
+                                "Clipboard is held by {app} — copy failed. Ctrl+S saves to a file instead, Esc cancels.",
+                                &[("app", &h)],
+                            ),
+                            None => tr("Clipboard is busy — copy failed. Ctrl+S saves to a file instead, Esc cancels.").into(),
                         });
                         log::warn!("Export: copy failed; selection remains open.");
                         if let Some(raw) = hwnd {
@@ -952,7 +954,7 @@ impl Overlay {
                         Ok(()) => this.close(window, cx),
                         Err(e) => {
                             log::error!("Export: save as failed: {e:#}");
-                            this.notice = Some(format!("Save failed: {e}"));
+                            this.notice = Some(trf("Save failed: {error}", &[("error", &e.to_string())]));
                             cx.notify();
                         }
                     });
@@ -1020,51 +1022,70 @@ impl Overlay {
             return;
         }
         if !reshot_ocr::is_available() {
-            self.ocr.hint = Some("No OCR language pack installed (Settings ▸ Language ▸ add an OCR feature).".into());
+            self.ocr.hint = Some(tr("No OCR language pack installed (Windows Settings ▸ Time & language ▸ Language ▸ add an OCR feature).").into());
             cx.notify();
             return;
         }
         let (w, h) = (self.editor.width(), self.editor.height());
         let Some(region) = self.sel.pixel_union(w, h) else {
-            self.ocr.hint = Some("Select an area first, then press the OCR tool.".into());
+            self.ocr.hint = Some(tr("Select an area first, then press the OCR tool.").into());
             cx.notify();
             return;
         };
         self.finish_editing(cx);
         self.panel.close();
-        self.ocr.begin();
-        let lang = self.ocr.lang;
+        let run = self.ocr.begin();
+        let lang = self.ocr.lang.clone();
+        // The interface language first, then English, then everything else installed.
+        let priority = reshot_core::i18n::ocr_priority();
         let crop = crop_bgra(self.editor.base(), region);
-        cx.spawn(async move |this, cx| {
-            let lines = cx
-                .background_spawn(async move {
-                    let (w, h) = (region.width() as u32, region.height() as u32);
-                    reshot_ocr::recognize(&crop, w, h, w as usize * 4, lang)
-                })
-                .await;
-            let _ = this.update(cx, |this, cx| {
-                this.ocr.finish(lines, region);
-                cx.notify();
+        let (tx, rx) = async_channel::unbounded();
+        cx.background_spawn(async move {
+            let (w, h) = (region.width() as u32, region.height() as u32);
+            reshot_ocr::recognize_staged(&crop, w, h, w as usize * 4, &lang, &priority, |lines, last| {
+                let _ = tx.send_blocking((lines, last));
             });
+        })
+        .detach();
+        cx.spawn(async move |this, cx| {
+            while let Ok((lines, last)) = rx.recv().await {
+                let gone = this
+                    .update(cx, |this, cx| {
+                        this.ocr.finish(run, lines, region, last);
+                        cx.notify();
+                    })
+                    .is_err();
+                if gone || last {
+                    break;
+                }
+            }
         })
         .detach();
         cx.notify();
     }
 
     pub(crate) fn toggle_ocr_language(&mut self, cx: &mut Context<Self>) {
-        self.ocr.cycle_language();
+        self.ocr.cycle_language(&reshot_ocr::available_language_tags());
         if self.ocr.active {
+            // A run still reading would answer for the previous language.
+            self.ocr.busy = false;
             self.run_ocr(cx);
         } else {
-            self.ocr.hint = Some(format!("OCR mode: {}", self.ocr.mode_label()));
+            self.ocr.hint = Some(trf("OCR mode: {mode}", &[("mode", &self.ocr.mode_label())]));
             cx.notify();
         }
     }
 
     fn copy_ocr(&mut self, cx: &mut Context<Self>) {
-        let Some((text, scope)) = self.ocr.text_to_copy() else { return };
+        let Some((text, all)) = self.ocr.text_to_copy() else { return };
+        let count = text.chars().count().to_string();
+        let message = if all {
+            trf("Copied all text. Characters: {count}.", &[("count", &count)])
+        } else {
+            trf("Copied the selection. Characters: {count}.", &[("count", &count)])
+        };
         match reshot_platform::clipboard::set_text(&text) {
-            Ok(()) => self.ocr.hint = Some(format!("Copied {scope}, {} chars.", text.chars().count())),
+            Ok(()) => self.ocr.hint = Some(message),
             Err(_) => log::error!("OCR copy failed."),
         }
         cx.notify();

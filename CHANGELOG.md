@@ -3,6 +3,26 @@
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and this
 project adheres to [Semantic Versioning](https://semver.org/).
 
+## [Unreleased]
+
+### Added
+
+- The interface is translated into 30 languages: English, Russian, Ukrainian, German,
+  French, Spanish, Italian, Portuguese, Dutch, Polish, Czech, Slovak, Hungarian, Romanian,
+  Bulgarian, Serbian, Croatian, Slovenian, Greek, Swedish, Norwegian, Danish, Finnish,
+  Estonian, Latvian, Lithuanian, Turkish, Simplified and Traditional Chinese, Japanese and
+  Korean. Settings ▸ General ▸ Language picks one; by default it follows the Windows display
+  language. Settings, the overlay, the tray menu, notifications and dialogs all switch.
+- Text recognition works in every language Windows has an OCR pack for, not only Russian
+  and English. AUTO runs every installed pack: the interface language and English first,
+  with their result shown at once, then the rest, which refine it a moment later. A right
+  click on the OCR tab now cycles AUTO and each installed language.
+
+### Changed
+
+- With only the Russian and English packs installed, AUTO reads exactly as before,
+  whichever of the two the interface language puts first.
+
 ## [1.4.0] - Unreleased (test build)
 
 ### Fixed

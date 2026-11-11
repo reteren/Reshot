@@ -9,6 +9,7 @@ use windows::Win32::UI::Controls::{
 };
 use windows::Win32::UI::HiDpi::GetDpiForSystem;
 use windows::Win32::UI::WindowsAndMessaging::*;
+use reshot_core::i18n::{self, tr};
 use windows::core::{PWSTR, w};
 
 pub(crate) const CAPTURE: u32 = 0x7001;
@@ -27,7 +28,23 @@ pub(crate) struct TrayMenu {
     title: HFONT,
     scale: f32,
     opened: std::cell::Cell<Option<std::time::Instant>>,
+    /// The interface language the item strings were last written in.
+    language: std::cell::Cell<&'static str>,
 }
+
+/// An item's label in the current interface language. The title is the product name.
+fn label(id: u32) -> &'static str {
+    match id {
+        TITLE => "RESHOT",
+        CAPTURE => tr("&Capture"),
+        SETTINGS => tr("&Settings…"),
+        PAUSE => tr("&Pause hotkey"),
+        QUIT => tr("&Quit"),
+        _ => "",
+    }
+}
+
+const ITEMS: [u32; 7] = [TITLE, CAPTURE, SETTINGS, RULE_ONE, PAUSE, RULE_TWO, QUIT];
 
 impl TrayMenu {
     pub fn new() -> Result<Self> {
@@ -44,6 +61,7 @@ impl TrayMenu {
                 bold: font(scale, 12, 700),
                 title: font(scale, 10, 700),
                 opened: std::cell::Cell::new(None),
+                language: std::cell::Cell::new(i18n::current().code),
             };
             ensure!(
                 !menu.background.is_invalid()
@@ -62,17 +80,10 @@ impl TrayMenu {
                     ..Default::default()
                 },
             )?;
-            for (id, label, disabled) in [
-                (TITLE, "RESHOT", true),
-                (CAPTURE, "&Capture", false),
-                (SETTINGS, "&Settings…", false),
-                (RULE_ONE, "", true),
-                (PAUSE, "&Pause hotkey", false),
-                (RULE_TWO, "", true),
-                (QUIT, "&Quit", false),
-            ] {
+            for id in ITEMS {
+                let disabled = matches!(id, TITLE | RULE_ONE | RULE_TWO);
                 // Retain real labels as well as owner drawing, for menu accessibility.
-                let mut label: Vec<u16> = label.encode_utf16().chain(Some(0)).collect();
+                let mut label: Vec<u16> = label(id).encode_utf16().chain(Some(0)).collect();
                 InsertMenuItemW(
                     handle,
                     u32::MAX,
@@ -94,6 +105,27 @@ impl TrayMenu {
 
     pub fn prepare(&self, paused: bool, opened: std::time::Instant) {
         self.opened.set(Some(opened));
+        let language = i18n::current().code;
+        if self.language.replace(language) != language {
+            // Rewriting the strings makes Windows measure the items again for the new widths.
+            for id in ITEMS {
+                let mut text: Vec<u16> = label(id).encode_utf16().chain(Some(0)).collect();
+                unsafe {
+                    let _ = SetMenuItemInfoW(
+                        self.handle,
+                        id,
+                        false,
+                        &MENUITEMINFOW {
+                            cbSize: std::mem::size_of::<MENUITEMINFOW>() as u32,
+                            fMask: MIIM_FTYPE | MIIM_STRING,
+                            fType: MFT_OWNERDRAW,
+                            dwTypeData: PWSTR(text.as_mut_ptr()),
+                            ..Default::default()
+                        },
+                    );
+                }
+            }
+        }
         unsafe {
             CheckMenuItem(
                 self.handle,
@@ -107,7 +139,14 @@ impl TrayMenu {
         if item.CtlType != ODT_MENU {
             return false;
         }
-        item.itemWidth = self.px(180) as u32;
+        // Wide enough for the longest label in the current language, never narrower than the
+        // 180 px the English menu was designed at.
+        let text = ITEMS
+            .iter()
+            .map(|&id| self.text_width(label(id), if id == CAPTURE { self.bold } else { self.regular }))
+            .max()
+            .unwrap_or(0);
+        item.itemWidth = self.px(180).max(text + self.px(6 + 26 + 6 + 12)) as u32;
         item.itemHeight = self.px(match item.itemID {
             TITLE => 26,
             RULE_ONE => 12,
@@ -168,14 +207,12 @@ impl TrayMenu {
                         bevel(dc, inner, self.px(1), 0xBBBBBB, 0x454545);
                     }
                 }
-                let (label, font) = match item.itemID {
-                    TITLE => ("RESHOT", self.title),
-                    CAPTURE => ("&Capture", self.bold),
-                    SETTINGS => ("&Settings…", self.regular),
-                    PAUSE => ("&Pause hotkey", self.regular),
-                    QUIT => ("&Quit", self.regular),
-                    _ => ("", self.regular),
+                let font = match item.itemID {
+                    TITLE => self.title,
+                    CAPTURE => self.bold,
+                    _ => self.regular,
                 };
+                let label = label(item.itemID);
                 if item.itemID == PAUSE {
                     let x = inner.left + self.px(6);
                     let y = (inner.top + inner.bottom - self.px(12)) / 2;
@@ -219,6 +256,21 @@ impl TrayMenu {
             );
         }
         true
+    }
+
+    /// The drawn width of a label, mnemonic marker excluded.
+    fn text_width(&self, text: &str, font: HFONT) -> i32 {
+        let shown: Vec<u16> = text.replace('&', "").encode_utf16().collect();
+        // SAFETY: a screen DC borrowed for measuring only; the font is restored before release.
+        unsafe {
+            let dc = GetDC(None);
+            let old = SelectObject(dc, font.into());
+            let mut size = windows::Win32::Foundation::SIZE::default();
+            let _ = GetTextExtentPoint32W(dc, &shown, &mut size);
+            SelectObject(dc, old);
+            ReleaseDC(None, dc);
+            size.cx
+        }
     }
 
     fn px(&self, value: i32) -> i32 {

@@ -3,6 +3,7 @@
 //! and, except text, hardness; ink tools add the colour picker and the Text tool the font
 //! family.
 
+use reshot_core::i18n::tr;
 use std::cell::{Cell, RefCell};
 use std::rc::Rc;
 use std::time::{Duration, Instant};
@@ -616,7 +617,7 @@ impl Overlay {
             svg().path("icons/eyedropper.svg").size(px(14.)).text_color(theme::text()),
         )
             .tooltip(theme::tooltip(
-                "Color picker. Right-click and hold on the image to pick a colour. Click here to keep it armed until you right-click.",
+                tr("Color picker. Right-click and hold on the image to pick a colour. Click here to keep it armed until you right-click."),
             ))
             .on_click(cx.listener(|this, _, _, cx| {
                 let armed = !this.eyedropper_armed;
@@ -684,7 +685,7 @@ impl Overlay {
                     }),
                 ),
         );
-        let reset = theme::button("reset-color", label("Reset").px(px(2.)))
+        let reset = theme::button("reset-color", label(tr("Reset")).px(px(2.)))
             .min_h(px(22.))
             .on_click(cx.listener(|this, _, _, cx| {
                 if let Some(tool) = this.tool() {
@@ -787,7 +788,7 @@ impl Overlay {
             .flex()
             .items_center()
             .mb(px(8.))
-            .child(label("Font").w(px(88.)))
+            .child(label(tr("Font")).w(px(88.)))
             .child(combo)
             .into_any_element()
     }
@@ -842,7 +843,7 @@ impl Overlay {
                     // A family without Cyrillic draws Russian as boxes in the screenshot, and
                     // this row's own preview cannot show that: it is dimmed instead.
                     if !e.supports_cyrillic {
-                        row = row.opacity(0.45).tooltip(theme::tooltip("No Cyrillic glyphs in this font"));
+                        row = row.opacity(0.45).tooltip(theme::tooltip(tr("No Cyrillic glyphs in this font")));
                     }
                     row
                 })
@@ -852,7 +853,7 @@ impl Overlay {
 
         let (sw, si) = theme::inset(theme::input_dark(), theme::input_light(), theme::input_bg());
         let search_text = if self.panel.font_search.is_empty() {
-            div().opacity(0.45).child("Search fonts")
+            div().opacity(0.45).child(tr("Search fonts"))
         } else {
             div().child(self.panel.font_search.clone())
         };
@@ -946,20 +947,20 @@ impl Overlay {
                     (0..3).map(|_| div().mx(px(2.)).size(px(3.)).rounded_full().bg(rgba(0xFFFFFFDD))),
                 ),
             )
-            .tooltip(theme::tooltip("Tool settings (Shift)"))
+            .tooltip(theme::tooltip(tr("Tool settings (Shift)")))
             .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
             .on_click(cx.listener(|this, _, _, cx| this.toggle_panel(cx)));
 
         let mut content = div().w(px(PANEL_WIDTH)).p(px(10.)).flex().flex_col().font_family(theme::FONT);
-        content = content.child(self.slider_row(Slider::Size, "Size", tool, cx));
+        content = content.child(self.slider_row(Slider::Size, tr("Size"), tool, cx));
         if tool == DrawTool::Text {
             content = content.child(self.font_row(cx));
         }
-        let name = if tool.is_effect() { "Strength" } else { "Opacity" };
+        let name = if tool.is_effect() { tr("Strength") } else { tr("Opacity") };
         content = content.child(self.slider_row(Slider::Opacity, name, tool, cx));
         if tool.has_hardness() {
             // How much of the brush is solid before its edge fades, as in hive.
-            content = content.child(self.slider_row(Slider::Hardness, "Hardness", tool, cx));
+            content = content.child(self.slider_row(Slider::Hardness, tr("Hardness"), tool, cx));
         }
         if tool.has_color() {
             content = content.child(self.color_section(tool, cx));

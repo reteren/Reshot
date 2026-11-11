@@ -2,6 +2,7 @@
 //! sub-tool flyouts (right-click a tab, or rest on it for half a second), and the audio
 //! source picker behind a right-click on the two record tools.
 
+use reshot_core::i18n::tr;
 use std::time::{Duration, Instant};
 
 use gpui::{
@@ -108,48 +109,48 @@ impl Tab {
 
     fn tooltip(self) -> &'static str {
         match self {
-            Tab::Select => "Selection (1)",
-            Tab::Brush => "Brush (2). Right click for color picker",
-            Tab::Shapes => "Shapes (3)",
-            Tab::Lines => "Lines (4)",
-            Tab::Eraser => "Eraser (5)",
-            Tab::Effects => "Effects (6)",
-            Tab::Ocr => "Copy text from image, OCR (7). Right-click: AUTO / RU / EN",
-            Tab::Text => "Text (8)",
-            Tab::Record => "Record video (9). Right-click for audio sources",
-            Tab::Audio => "Record audio (0). Right-click for sources",
-            Tab::Copy => "Copy to clipboard",
-            Tab::Save => "Save",
-            Tab::SaveAs => "Save as…",
-            Tab::Close => "Close (Esc)",
+            Tab::Select => tr("Selection (1)"),
+            Tab::Brush => tr("Brush (2). Right click for color picker"),
+            Tab::Shapes => tr("Shapes (3)"),
+            Tab::Lines => tr("Lines (4)"),
+            Tab::Eraser => tr("Eraser (5)"),
+            Tab::Effects => tr("Effects (6)"),
+            Tab::Ocr => tr("Copy text from image, OCR (7). Right-click: language"),
+            Tab::Text => tr("Text (8)"),
+            Tab::Record => tr("Record video (9). Right-click for audio sources"),
+            Tab::Audio => tr("Record audio (0). Right-click for sources"),
+            Tab::Copy => tr("Copy to clipboard"),
+            Tab::Save => tr("Save"),
+            Tab::SaveAs => tr("Save as…"),
+            Tab::Close => tr("Close (Esc)"),
         }
     }
 }
 
 fn tool_icon(t: DrawTool) -> (&'static str, f32, f32, &'static str) {
     match t {
-        DrawTool::Square => ("icons/square.svg", 15., 15., "Square"),
-        DrawTool::Circle => ("icons/circle.svg", 15., 15., "Circle"),
-        DrawTool::Triangle => ("icons/triangle.svg", 18., 17., "Triangle"),
-        DrawTool::Arrow => ("icons/arrow.svg", 18., 18., "Arrow"),
-        DrawTool::Line => ("icons/line.svg", 18., 18., "Line"),
-        DrawTool::Eraser => ("icons/eraser.svg", 20., 20., "Eraser"),
-        DrawTool::FilterEraser => ("icons/filter-eraser.svg", 22., 20., "Filter eraser (removes blur / pixelation)"),
-        DrawTool::AbsoluteEraser => ("icons/abs-eraser.svg", 22., 20., "Absolute eraser (to transparency)"),
-        DrawTool::Pixelize => ("icons/pixelate.svg", 18., 18., "Pixelate"),
-        DrawTool::Blur => ("icons/blur.svg", 18., 18., "Blur"),
-        DrawTool::Brush => ("icons/brush.svg", 20., 20., "Brush"),
-        DrawTool::Text => ("", 0., 0., "Text"),
+        DrawTool::Square => ("icons/square.svg", 15., 15., tr("Square")),
+        DrawTool::Circle => ("icons/circle.svg", 15., 15., tr("Circle")),
+        DrawTool::Triangle => ("icons/triangle.svg", 18., 17., tr("Triangle")),
+        DrawTool::Arrow => ("icons/arrow.svg", 18., 18., tr("Arrow")),
+        DrawTool::Line => ("icons/line.svg", 18., 18., tr("Line")),
+        DrawTool::Eraser => ("icons/eraser.svg", 20., 20., tr("Eraser")),
+        DrawTool::FilterEraser => ("icons/filter-eraser.svg", 22., 20., tr("Filter eraser (removes blur / pixelation)")),
+        DrawTool::AbsoluteEraser => ("icons/abs-eraser.svg", 22., 20., tr("Absolute eraser (to transparency)")),
+        DrawTool::Pixelize => ("icons/pixelate.svg", 18., 18., tr("Pixelate")),
+        DrawTool::Blur => ("icons/blur.svg", 18., 18., tr("Blur")),
+        DrawTool::Brush => ("icons/brush.svg", 20., 20., tr("Brush")),
+        DrawTool::Text => ("", 0., 0., tr("Text")),
     }
 }
 
 fn shape_icon(k: ShapeKind) -> (&'static str, f32, f32, &'static str) {
     match k {
-        ShapeKind::Rectangle => ("icons/sel-rect.svg", 17., 14., "Rectangle"),
-        ShapeKind::Ellipse => ("icons/sel-ellipse.svg", 17., 15., "Ellipse"),
-        ShapeKind::Triangle => ("icons/sel-triangle.svg", 18., 17., "Triangle"),
-        ShapeKind::Lasso => ("icons/sel-lasso.svg", 20., 20., "Lasso"),
-        ShapeKind::Polygon => ("icons/sel-polygon.svg", 20., 20., "Polygon"),
+        ShapeKind::Rectangle => ("icons/sel-rect.svg", 17., 14., tr("Rectangle")),
+        ShapeKind::Ellipse => ("icons/sel-ellipse.svg", 17., 15., tr("Ellipse")),
+        ShapeKind::Triangle => ("icons/sel-triangle.svg", 18., 17., tr("Triangle")),
+        ShapeKind::Lasso => ("icons/sel-lasso.svg", 20., 20., tr("Lasso")),
+        ShapeKind::Polygon => ("icons/sel-polygon.svg", 20., 20., tr("Polygon")),
     }
 }
 
@@ -502,7 +503,7 @@ impl Overlay {
                 .child(div().h(px(1.)).bg(theme::rule_dark()))
                 .child(div().h(px(1.)).bg(theme::rule_light()))
         };
-        let system_label = if m.for_video { "Select all" } else { "System audio (all windows)" };
+        let system_label = if m.for_video { tr("Select all") } else { tr("System audio (all windows)") };
         let mut list = div().flex().flex_col().child(row("src-system".into(), Some(m.system), system_label.into()).on_click(
             cx.listener(|this, _, _, cx| {
                 if let Some(m) = &mut this.source_menu {
@@ -515,7 +516,7 @@ impl Overlay {
             }),
         ));
         if !m.for_video {
-            list = list.child(row("src-mic".into(), Some(m.mic), "Microphone".into()).on_click(cx.listener(|this, _, _, cx| {
+            list = list.child(row("src-mic".into(), Some(m.mic), tr("Microphone").into()).on_click(cx.listener(|this, _, _, cx| {
                 if let Some(m) = &mut this.source_menu {
                     m.mic = !m.mic;
                 }
@@ -539,7 +540,7 @@ impl Overlay {
                 }),
             ));
         }
-        let start = if m.for_video { "●  Start video recording" } else { "●  Start recording" };
+        let start = if m.for_video { tr("●  Start video recording") } else { tr("●  Start recording") };
         list = list.child(sep()).child(
             row("src-start".into(), None, start.into())
                 .on_click(cx.listener(|this, _, window, cx| this.start_from_menu(window, cx))),

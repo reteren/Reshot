@@ -107,18 +107,23 @@ fn break_lines(s: &str, width: f32, size: f32, window: &Window) -> SharedString 
         };
         f32::from(window.text_system().shape_line(line.to_string().into(), px(size), &[run], None).width)
     };
-    // Break opportunities: after a space, and after a hyphen between two letters.
+    // Break opportunities: after a space, after a hyphen between two letters, and between
+    // Chinese or Japanese characters, which are written without spaces.
     let mut tokens = Vec::new();
     let mut start = 0;
     let chars: Vec<(usize, char)> = s.char_indices().collect();
     for (i, &(at, c)) in chars.iter().enumerate() {
         let end = at + c.len_utf8();
-        let next_is_space = chars.get(i + 1).is_some_and(|(_, n)| *n == ' ');
+        let next = chars.get(i + 1).map(|(_, n)| *n);
+        let next_is_space = next == Some(' ');
         let hyphen = c == '-'
             && i > 0
             && chars[i - 1].1.is_alphabetic()
-            && chars.get(i + 1).is_some_and(|(_, n)| n.is_alphabetic());
-        if (c == ' ' && !next_is_space) || hyphen {
+            && next.is_some_and(char::is_alphabetic);
+        let ideographic = next.is_some_and(|n| {
+            (is_cjk(c) || is_cjk(n)) && n != ' ' && c != ' ' && !no_line_start(n) && !no_line_end(c)
+        });
+        if (c == ' ' && !next_is_space) || hyphen || ideographic {
             tokens.push(&s[start..end]);
             start = end;
         }
@@ -140,6 +145,21 @@ fn break_lines(s: &str, width: f32, size: f32, window: &Window) -> SharedString 
     lines.push(current.trim_end().to_string());
     lines.join("
 ").into()
+}
+
+/// Han, kana and fullwidth forms: a line may break between any two of them.
+fn is_cjk(c: char) -> bool {
+    matches!(c, '\u{3000}'..='\u{30FF}' | '\u{3400}'..='\u{4DBF}' | '\u{4E00}'..='\u{9FFF}' | '\u{F900}'..='\u{FAFF}' | '\u{FF00}'..='\u{FFEF}')
+}
+
+/// Closing punctuation that must not begin a line (kinsoku).
+fn no_line_start(c: char) -> bool {
+    "、。，．・：；？！ー）」』】〕〉》｝”’…%)]}.,:;!?".contains(c)
+}
+
+/// Opening punctuation that must not end a line.
+fn no_line_end(c: char) -> bool {
+    "（「『【〔〈《｛“‘([{".contains(c)
 }
 
 /// A `<p>`: 12 px on an 18 px line.

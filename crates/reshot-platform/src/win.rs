@@ -45,6 +45,28 @@ impl From<RECT> for PxRect {
     }
 }
 
+/// The user's Windows display languages, most preferred first (`ru-RU`, `en-US`, ...).
+pub fn preferred_ui_languages() -> Vec<String> {
+    use windows::Win32::Globalization::{GetUserPreferredUILanguages, MUI_LANGUAGE_NAME};
+    use windows::core::PWSTR;
+    let mut count = 0u32;
+    let mut len = 0u32;
+    // SAFETY: the first call only asks for the buffer length.
+    if unsafe { GetUserPreferredUILanguages(MUI_LANGUAGE_NAME, &mut count, None, &mut len) }.is_err() || len == 0 {
+        return Vec::new();
+    }
+    let mut buffer = vec![0u16; len as usize];
+    // SAFETY: the buffer holds the `len` UTF-16 units the first call asked for.
+    if unsafe { GetUserPreferredUILanguages(MUI_LANGUAGE_NAME, &mut count, Some(PWSTR(buffer.as_mut_ptr())), &mut len) }.is_err() {
+        return Vec::new();
+    }
+    buffer
+        .split(|&c| c == 0)
+        .filter(|tag| !tag.is_empty())
+        .map(String::from_utf16_lossy)
+        .collect()
+}
+
 /// Wraps a raw `HWND` value as it comes out of `raw-window-handle`.
 pub fn hwnd(raw: isize) -> HWND {
     HWND(raw as _)

@@ -8,6 +8,7 @@ pub mod filename;
 pub mod fonts;
 pub mod history;
 pub mod hotkey;
+pub mod i18n;
 pub mod log;
 pub mod paths;
 pub mod selection;

@@ -2,6 +2,7 @@
 //! boxes, paddings and line boxes, so the window measures as it did. The one thing gpui
 //! cannot do is `text-align: justify`; paragraphs are left-aligned.
 
+use reshot_core::i18n::tr;
 use super::vgui::{self, LINE, PARA, button, checkbox, hint, kbd, para, raised, sunken, text};
 use super::{Field, PALETTE, Popover, Select, SettingsWindow, Slider, Tab, Toggle};
 use crate::theme;
@@ -61,7 +62,7 @@ impl SettingsWindow {
         let value = self.text(key).to_string();
         let hotkey = matches!(key, Field::Hotkey | Field::AudioHotkey);
         let content: AnyElement = if value.is_empty() && key == Field::AudioHotkey && !active {
-            text(12., LINE).text_color(vgui::placeholder()).child("Not set").into_any_element()
+            text(12., LINE).text_color(vgui::placeholder()).child(tr("Not set")).into_any_element()
         } else if active && (self.select_all || hotkey) && !value.is_empty() {
             // A hotkey field being listened to shows its binding selected: the next
             // combination replaces it.
@@ -184,7 +185,7 @@ impl SettingsWindow {
             this.set_field(None, cx);
             cx.notify();
         }));
-        let mut row = input_group("Colour")
+        let mut row = input_group(tr("Colour"))
             .relative()
             .child(self.field(key, cx).w(px(66.)).flex_none())
             .child(keep_popover(well));
@@ -316,32 +317,35 @@ impl SettingsWindow {
 
     fn general(&self, cx: &mut Context<Self>) -> Div {
         let left = column()
-            .child(para("Global hotkeys:"))
-            .child(input_group("Capture").child(self.field(Field::Hotkey, cx).w(px(130.)).flex_none()))
-            .child(input_group("Quick audio record").child(self.field(Field::AudioHotkey, cx).w(px(130.)).flex_none()))
+            .child(para(tr("Global hotkeys:")))
+            .child(input_group(tr("Capture")).child(self.field(Field::Hotkey, cx).w(px(130.)).flex_none()))
+            .child(input_group(tr("Quick audio record")).child(self.field(Field::AudioHotkey, cx).w(px(130.)).flex_none()))
             .child(
                 div()
                     .flex()
                     .items_center()
                     .gap(px(8.))
-                    .child(hint("Click a field, then press a key combination. Print Screen (PrtScn / Prnt) is supported.").flex_1().min_w_0())
-                    .child(button("clear-audio-hotkey", "Clear", true, false).on_click(cx.listener(|this, _, _, cx| {
+                    .child(hint(tr("Click a field, then press a key combination. Print Screen (PrtScn / Prnt) is supported.")).flex_1().min_w_0())
+                    .child(button("clear-audio-hotkey", tr("Clear"), true, false).on_click(cx.listener(|this, _, _, cx| {
                         this.set_text(Field::AudioHotkey, String::new());
                         cx.notify();
                     }))),
             )
             .child(separator())
-            .child(para("Radial menu:"))
-            .child(self.check(Toggle::RadialGesture, "Choose by releasing the key", true, cx))
-            .child(hint("Holding the capture hotkey opens the quick menu. Normally the wheel stays up after you let go and waits for a left click; the centre, or anywhere outside the wheel, cancels. With this on the menu lives only while the key is held: point at a slice and release to run it, and a flick past the rim counts as pointing that way.").flex_grow());
+            .child(para(tr("Radial menu:")))
+            .child(self.check(Toggle::RadialGesture, tr("Choose by releasing the key"), true, cx))
+            .child(hint(tr("Holding the capture hotkey opens the quick menu. Normally the wheel stays up after you let go and waits for a left click; the centre, or anywhere outside the wheel, cancels. With this on the menu lives only while the key is held: point at a slice and release to run it, and a flick past the rim counts as pointing that way.")).flex_grow());
         // The webview's hint here carried `.inputLabel` (flex-grow) inside a column, so it
         // absorbs the spare height and the update checkbox sits at the bottom. Kept as it was.
         let right = column()
-            .child(para("System:"))
-            .child(self.check(Toggle::Autostart, "Start with Windows", true, cx))
-            .child(self.check(Toggle::Elevated, "As administrator", self.draft.autostart, cx))
-            .child(hint("Requires an all-users installation in Program Files. Needed to capture over administrator applications. Windows asks for permission once to create the Reshot startup task.").flex_grow())
-            .child(self.check(Toggle::Updates, "Check for updates automatically", true, cx))
+            .child(para(tr("Language:")))
+            .child(self.select(Select::Language, None, cx))
+            .child(separator())
+            .child(para(tr("System:")))
+            .child(self.check(Toggle::Autostart, tr("Start with Windows"), true, cx))
+            .child(self.check(Toggle::Elevated, tr("As administrator"), self.draft.autostart, cx))
+            .child(hint(tr("Requires an all-users installation in Program Files. Needed to capture over administrator applications. Windows asks for permission once to create the Reshot startup task.")).flex_grow())
+            .child(self.check(Toggle::Updates, tr("Check for updates automatically"), true, cx))
             .child(separator())
             .child(hint(self.settings_path.clone()));
         panel().child(left).child(right)
@@ -351,35 +355,35 @@ impl SettingsWindow {
         panel()
             .child(
                 column()
-                    .child(para("Dimming of the non-selected area:"))
-                    .child(self.slider_row(Slider::Dim, "Opacity", cx))
+                    .child(para(tr("Dimming of the non-selected area:")))
+                    .child(self.slider_row(Slider::Dim, tr("Opacity"), cx))
                     .child(self.color_row(Field::DimColor, cx)),
             )
             .child(
                 column()
-                    .child(hint("The overlay dims everything outside the current selection. Opacity 0 disables dimming entirely; the colour accepts any #RRGGBB value."))
+                    .child(hint(tr("The overlay dims everything outside the current selection. Opacity 0 disables dimming entirely; the colour accepts any #RRGGBB value.")))
                     .child(separator())
-                    .child(para("Screen sharing:"))
-                    .child(self.check(Toggle::HideOverlay, "Hide the overlay from other applications", true, cx))
-                    .child(hint("Off, so a screen share, a call or someone else’s recorder shows the frozen frame, the selection and everything you draw on it. Turn it on and the overlay is visible on your display alone — everyone else keeps seeing the live desktop. Reshot’s own recordings never contain the overlay either way.")),
+                    .child(para(tr("Screen sharing:")))
+                    .child(self.check(Toggle::HideOverlay, tr("Hide the overlay from other applications"), true, cx))
+                    .child(hint(tr("Off, so a screen share, a call or someone else’s recorder shows the frozen frame, the selection and everything you draw on it. Turn it on and the overlay is visible on your display alone — everyone else keeps seeing the live desktop. Reshot’s own recordings never contain the overlay either way."))),
             )
     }
 
     fn output(&self, cx: &mut Context<Self>) -> Div {
-        let mut left = column().child(para("Folders:"));
-        for (name, key) in [("Screenshots", Field::Screenshots), ("Videos", Field::Videos), ("Audio records", Field::Records)] {
+        let mut left = column().child(para(tr("Folders:")));
+        for (name, key) in [(tr("Screenshots"), Field::Screenshots), (tr("Videos"), Field::Videos), (tr("Audio records"), Field::Records)] {
             left = left.children(self.path_rows(name, key, cx));
         }
         panel().child(left).child(
             column()
-                .child(para("Image format:"))
-                .child(input_group("Format").child(self.select(Select::Format, Some(90.), cx)))
-                .child(self.slider_row(Slider::Quality, "Quality", cx))
-                .child(hint("Quality applies to JPG and WebP only; PNG is always lossless."))
+                .child(para(tr("Image format:")))
+                .child(input_group(tr("Format")).child(self.select(Select::Format, Some(90.), cx)))
+                .child(self.slider_row(Slider::Quality, tr("Quality"), cx))
+                .child(hint(tr("Quality applies to JPG and WebP only; PNG is always lossless.")))
                 .child(separator())
-                .child(input_group("Filename"))
+                .child(input_group(tr("Filename")))
                 .child(self.field(Field::Filename, cx))
-                .child(hint("Placeholders: {date} and {time}.")),
+                .child(hint(tr("Placeholders: {date} and {time}."))),
         )
     }
 
@@ -387,23 +391,23 @@ impl SettingsWindow {
         panel()
             .child(
                 column()
-                    .child(para("Recording:"))
-                    .child(input_group("Frame rate").child(self.select(Select::Fps, Some(90.), cx)))
-                    .child(self.slider_row(Slider::Bitrate, "Bitrate, kbps", cx))
-                    .child(hint("The lowest bitrate a recording gets. Larger areas get more on their own; raise it for sharper video of small areas, at the cost of bigger files."))
+                    .child(para(tr("Recording:")))
+                    .child(input_group(tr("Frame rate")).child(self.select(Select::Fps, Some(90.), cx)))
+                    .child(self.slider_row(Slider::Bitrate, tr("Bitrate, kbps"), cx))
+                    .child(hint(tr("The lowest bitrate a recording gets. Larger areas get more on their own; raise it for sharper video of small areas, at the cost of bigger files.")))
                     .child(separator())
-                    .child(para("Recording indicator:"))
-                    .child(self.check(Toggle::Corners, "Show corner brackets", true, cx))
+                    .child(para(tr("Recording indicator:")))
+                    .child(self.check(Toggle::Corners, tr("Show corner brackets"), true, cx))
                     .child(self.color_row(Field::CornersColor, cx))
-                    .child(self.slider_row(Slider::Corners, "Opacity", cx)),
+                    .child(self.slider_row(Slider::Corners, tr("Opacity"), cx)),
             )
             .child(
                 column()
-                    .child(para("Audio recorded with video:"))
-                    .child(self.check(Toggle::VideoSystem, "System audio", true, cx))
-                    .child(self.check(Toggle::VideoMic, "Microphone", true, cx))
-                    .child(self.check(Toggle::AskTracks, "Ask which tracks to keep when saving", true, cx))
-                    .child(hint("Video is encoded as H.264 / MP4, which has no alpha channel, anything outside a non-rectangular selection is filled black.")),
+                    .child(para(tr("Audio recorded with video:")))
+                    .child(self.check(Toggle::VideoSystem, tr("System audio"), true, cx))
+                    .child(self.check(Toggle::VideoMic, tr("Microphone"), true, cx))
+                    .child(self.check(Toggle::AskTracks, tr("Ask which tracks to keep when saving"), true, cx))
+                    .child(hint(tr("Video is encoded as H.264 / MP4, which has no alpha channel, anything outside a non-rectangular selection is filled black."))),
             )
     }
 
@@ -411,15 +415,15 @@ impl SettingsWindow {
         panel()
             .child(
                 column()
-                    .child(para("Standalone audio recorder:"))
-                    .child(self.check(Toggle::AudioSystem, "System audio", true, cx))
-                    .child(self.check(Toggle::AudioMic, "Microphone", true, cx)),
+                    .child(para(tr("Standalone audio recorder:")))
+                    .child(self.check(Toggle::AudioSystem, tr("System audio"), true, cx))
+                    .child(self.check(Toggle::AudioMic, tr("Microphone"), true, cx)),
             )
             .child(
                 column()
-                    .child(para("Microphone device:"))
+                    .child(para(tr("Microphone device:")))
                     .child(self.select(Select::Mic, None, cx))
-                    .child(hint("Shared with the video recorder. Individual windows can still be picked at capture time by right-clicking the Audio button in the overlay.")),
+                    .child(hint(tr("Shared with the video recorder. Individual windows can still be picked at capture time by right-clicking the Audio button in the overlay."))),
             )
     }
 
@@ -511,7 +515,7 @@ impl SettingsWindow {
 
     fn info(&self, cx: &mut Context<Self>) -> Div {
         let hotkey = self.draft.hotkey.clone();
-        let audio = if self.draft.audio_hotkey.is_empty() { "not set".to_string() } else { self.draft.audio_hotkey.clone() };
+        let audio = if self.draft.audio_hotkey.is_empty() { tr("not set").to_string() } else { self.draft.audio_hotkey.clone() };
         let mut n = 0usize;
         let mut bind = |keys: &[&str], what: &str| -> Div {
             let mut row = div().flex().items_start().gap(px(8.));
@@ -535,40 +539,40 @@ impl SettingsWindow {
             .flex()
             .flex_col()
             .gap(px(7.))
-            .child(group("Global (anywhere in Windows)", true))
-            .child(bind(&[&hotkey], "Tap: freeze the screen and start a capture"))
-            .child(bind(&[&hotkey], "Hold: open the radial quick menu"))
-            .child(bind(&[&hotkey], "While recording: stop and save"))
-            .child(bind(&[&audio], "Optional second hotkey: start / stop the audio recorder"))
-            .child(group("Radial menu (hold the main hotkey)", false));
+            .child(group(tr("Global (anywhere in Windows)"), true))
+            .child(bind(&[&hotkey], tr("Tap: freeze the screen and start a capture")))
+            .child(bind(&[&hotkey], tr("Hold: open the radial quick menu")))
+            .child(bind(&[&hotkey], tr("While recording: stop and save")))
+            .child(bind(&[&audio], tr("Optional second hotkey: start / stop the audio recorder")))
+            .child(group(tr("Radial menu (hold the main hotkey)"), false));
         // The two radial modes have different bindings; the list follows the checkbox.
         if self.draft.radial.click_to_choose {
             binds = binds
-                .child(bind(&["LMB"], "The wheel stays up after you let go: click a slice for quick screen recording, quick audio, or settings"))
-                .child(bind(&["LMB"], "Click the centre, or anywhere outside the wheel: cancel"));
+                .child(bind(&[tr("LMB")], tr("The wheel stays up after you let go: click a slice for quick screen recording, quick audio, or settings")))
+                .child(bind(&[tr("LMB")], tr("Click the centre, or anywhere outside the wheel: cancel")));
         } else {
             binds = binds
-                .child(bind(&[&hotkey], "Point at a slice and release: quick screen recording, quick audio, or settings"))
-                .child(bind(&[&hotkey], "Release with the cursor still in the middle: cancel"));
+                .child(bind(&[&hotkey], tr("Point at a slice and release: quick screen recording, quick audio, or settings")))
+                .child(bind(&[&hotkey], tr("Release with the cursor still in the middle: cancel")));
         }
-        binds = binds.child(bind(&["Esc", "RMB"], "Cancel, either way round"));
-        for (heading, rows) in BINDS {
+        binds = binds.child(bind(&["Esc", tr("RMB")], tr("Cancel, either way round")));
+        for (i, (heading, rows)) in self::binds().into_iter().enumerate() {
             binds = binds.child(group(heading, false));
-            for (keys, what) in *rows {
-                binds = binds.child(bind(keys, what));
+            for (keys, what) in rows {
+                binds = binds.child(bind(&keys, what));
             }
-            if *heading == "Tools, in toolbar order" {
-                binds = binds.child(hint("Number-pad digits work too. A category resumes whichever sub-tool you used last."));
+            if i == 0 {
+                binds = binds.child(hint(tr("Number-pad digits work too. A category resumes whichever sub-tool you used last.")));
             }
         }
 
-        let about = column().child(para("About:")).child(
+        let about = column().child(para(tr("About:"))).child(
             div().flex().flex_col().gap(px(8.))
-                .child(para("Reshot is a resident screenshot and screen-recording tool for Windows. It sits in the tray on a global hotkey and does no work at all until you call it."))
-                .child(para("Pressing the hotkey freezes every monitor at once. Select an area of any shape: rectangle, ellipse, triangle, lasso or polygon. Annotate it with brushes, shapes, text, blur and pixelation, then copy it, save it, or record it as video. Anything outside a non-rectangular selection is exported as transparency."))
-                .child(para("Video is written as H.264 / MP4. System audio and the microphone are captured separately, so you can pick which tracks to keep after the recording ends. Right-click the record tool to record only certain windows' sound. There is also a standalone audio recorder that can capture individual windows.")),
+                .child(para(tr("Reshot is a resident screenshot and screen-recording tool for Windows. It sits in the tray on a global hotkey and does no work at all until you call it.")))
+                .child(para(tr("Pressing the hotkey freezes every monitor at once. Select an area of any shape: rectangle, ellipse, triangle, lasso or polygon. Annotate it with brushes, shapes, text, blur and pixelation, then copy it, save it, or record it as video. Anything outside a non-rectangular selection is exported as transparency.")))
+                .child(para(tr("Video is written as H.264 / MP4. System audio and the microphone are captured separately, so you can pick which tracks to keep after the recording ends. Right-click the record tool to record only certain windows' sound. There is also a standalone audio recorder that can capture individual windows."))),
         );
-        let keys = column().child(para("Keys:")).child(binds);
+        let keys = column().child(para(tr("Keys:"))).child(binds);
         panel()
             .overflow_hidden()
             .child(self.scroll_column(0, about, cx))
@@ -583,97 +587,99 @@ fn panel() -> Div {
 
 /// The Info reference past the two groups that follow the settings, in toolbar order.
 /// A shortcut line: its key chips and what they do.
-type Bind = (&'static [&'static str], &'static str);
+type Bind = (Vec<&'static str>, &'static str);
 
-const BINDS: &[(&str, &[Bind])] = &[
+fn binds() -> Vec<(&'static str, Vec<Bind>)> {
+    vec![
     (
-        "Tools, in toolbar order",
-        &[
-            (&["1"], "Selection"),
-            (&["2"], "Brush"),
-            (&["3"], "Shapes (square, circle, triangle)"),
-            (&["4"], "Lines (line, arrow)"),
-            (&["5"], "Erasers (normal, absolute, filter)"),
-            (&["6"], "Effects (blur, pixelate)"),
-            (&["7"], "Copy text from the image (OCR)"),
-            (&["8"], "Text"),
-            (&["9"], "Record video"),
-            (&["0"], "Record audio"),
+        tr("Tools, in toolbar order"),
+        vec![
+            (vec!["1"], tr("Selection")),
+            (vec!["2"], tr("Brush")),
+            (vec!["3"], tr("Shapes (square, circle, triangle)")),
+            (vec!["4"], tr("Lines (line, arrow)")),
+            (vec!["5"], tr("Erasers (normal, absolute, filter)")),
+            (vec!["6"], tr("Effects (blur, pixelate)")),
+            (vec!["7"], tr("Copy text from the image (OCR)")),
+            (vec!["8"], tr("Text")),
+            (vec!["9"], tr("Record video")),
+            (vec!["0"], tr("Record audio")),
         ],
     ),
     (
-        "Selecting an area",
-        &[
-            (&["LMB"], "Drag: new selection"),
-            (&["Ctrl", "LMB"], "Drag: add another selection alongside the first"),
-            (&["Shift"], "Held before dragging: lock to a square / circle"),
-            (&["Shift"], "Pressed mid-drag: keep the ratio it has now"),
-            (&["Ctrl", "A"], "Primary monitor; press again for every monitor"),
-            (&["LMB"], "On a handle: resize · inside the frame: move"),
-            (&["LMB"], "Polygon: place a point; click the first point to close"),
-            (&["RMB"], "Polygon: close the outline by the shortest line"),
-            (&["Esc"], "Polygon: abandon the outline"),
+        tr("Selecting an area"),
+        vec![
+            (vec![tr("LMB")], tr("Drag: new selection")),
+            (vec!["Ctrl", tr("LMB")], tr("Drag: add another selection alongside the first")),
+            (vec!["Shift"], tr("Held before dragging: lock to a square / circle")),
+            (vec!["Shift"], tr("Pressed mid-drag: keep the ratio it has now")),
+            (vec!["Ctrl", "A"], tr("Primary monitor; press again for every monitor")),
+            (vec![tr("LMB")], tr("On a handle: resize · inside the frame: move")),
+            (vec![tr("LMB")], tr("Polygon: place a point; click the first point to close")),
+            (vec![tr("RMB")], tr("Polygon: close the outline by the shortest line")),
+            (vec!["Esc"], tr("Polygon: abandon the outline")),
         ],
     ),
     (
-        "Drawing",
-        &[
-            (&["LMB"], "Draw with the current tool (inside the selection)"),
-            (&["Shift"], "Open / close the tool settings panel"),
-            (&["LMB"], "On the dotted strip: the same panel"),
-            (&["RMB"], "Hold on the image: colour picker, release to take the colour"),
-            (&["LMB"], "Eyedropper button: stays armed until you right-click a pixel"),
-            (&["Ctrl", "LMB"], "Effects: drag a rectangle instead of brushing"),
+        tr("Drawing"),
+        vec![
+            (vec![tr("LMB")], tr("Draw with the current tool (inside the selection)")),
+            (vec!["Shift"], tr("Open / close the tool settings panel")),
+            (vec![tr("LMB")], tr("On the dotted strip: the same panel")),
+            (vec![tr("RMB")], tr("Hold on the image: colour picker, release to take the colour")),
+            (vec![tr("LMB")], tr("Eyedropper button: stays armed until you right-click a pixel")),
+            (vec!["Ctrl", tr("LMB")], tr("Effects: drag a rectangle instead of brushing")),
         ],
     ),
     (
-        "Toolbar (mouse)",
-        &[
-            (&["LMB"], "On a tab: activate it"),
-            (&["RMB"], "On a tab: sub-tool flyout (hovering 0.5 s opens it too)"),
-            (&["RMB"], "On record video / record audio: pick the sound sources"),
-            (&["RMB"], "On the OCR tab: switch AUTO / RU / EN"),
+        tr("Toolbar (mouse)"),
+        vec![
+            (vec![tr("LMB")], tr("On a tab: activate it")),
+            (vec![tr("RMB")], tr("On a tab: sub-tool flyout (hovering 0.5 s opens it too)")),
+            (vec![tr("RMB")], tr("On record video / record audio: pick the sound sources")),
+            (vec![tr("RMB")], tr("On the OCR tab: switch between AUTO and one installed language")),
         ],
     ),
     (
-        "Text tool",
-        &[
-            (&["LMB"], "Place the caret and start typing"),
-            (&["LMB", "drag"], "Move an existing text block (Selection tool works too)"),
-            (&["Double click"], "Edit an existing text block"),
-            (&["Delete"], "Remove the selected text block"),
-            (&["Enter"], "New line"),
-            (&["Backspace"], "Delete the last character"),
-            (&["Esc"], "Finish the text and keep it (clicking away does the same)"),
+        tr("Text tool"),
+        vec![
+            (vec![tr("LMB")], tr("Place the caret and start typing")),
+            (vec![tr("LMB"), tr("drag")], tr("Move an existing text block (Selection tool works too)")),
+            (vec![tr("Double click")], tr("Edit an existing text block")),
+            (vec!["Delete"], tr("Remove the selected text block")),
+            (vec!["Enter"], tr("New line")),
+            (vec!["Backspace"], tr("Delete the last character")),
+            (vec!["Esc"], tr("Finish the text and keep it (clicking away does the same)")),
         ],
     ),
     (
-        "Text recognition (OCR)",
-        &[
-            (&["LMB"], "Drag across words: selects them and copies on release"),
-            (&["Ctrl", "C"], "Copy the selected words"),
-            (&["Ctrl", "A"], "Select and copy all recognised text"),
-            (&["Esc"], "Leave OCR mode"),
+        tr("Text recognition (OCR)"),
+        vec![
+            (vec![tr("LMB")], tr("Drag across words: selects them and copies on release")),
+            (vec!["Ctrl", "C"], tr("Copy the selected words")),
+            (vec!["Ctrl", "A"], tr("Select and copy all recognised text")),
+            (vec!["Esc"], tr("Leave OCR mode")),
         ],
     ),
     (
-        "History",
-        &[
-            (&["Ctrl", "Z"], "Undo, 32 steps deep"),
-            (&["Ctrl", "Shift", "Z"], "Redo"),
-            (&["Ctrl", "Y"], "Redo, the same action as Ctrl+Shift+Z"),
+        tr("History"),
+        vec![
+            (vec!["Ctrl", "Z"], tr("Undo, 32 steps deep")),
+            (vec!["Ctrl", "Shift", "Z"], tr("Redo")),
+            (vec!["Ctrl", "Y"], tr("Redo, the same action as Ctrl+Shift+Z")),
         ],
     ),
     (
-        "Finishing the session",
-        &[
-            (&["Enter"], "Copy to the clipboard and close"),
-            (&["Ctrl", "C"], "Copy to the clipboard and close"),
-            (&["✕"], "Toolbar close button: cancel the session (same as Esc when nothing else is open)"),
-            (&["Esc"], "Backs out one layer at a time: armed eyedropper, then the settings panel, then an unfinished polygon, then the session itself"),
+        tr("Finishing the session"),
+        vec![
+            (vec!["Enter"], tr("Copy to the clipboard and close")),
+            (vec!["Ctrl", "C"], tr("Copy to the clipboard and close")),
+            (vec!["✕"], tr("Toolbar close button: cancel the session (same as Esc when nothing else is open)")),
+            (vec!["Esc"], tr("Backs out one layer at a time: armed eyedropper, then the settings panel, then an unfinished polygon, then the session itself")),
         ],
     ),
-];
+]
+}
 
 impl Focusable for SettingsWindow {
     fn focus_handle(&self, _: &gpui::App) -> gpui::FocusHandle {
@@ -794,7 +800,7 @@ impl Render for SettingsWindow {
                             .text_size(px(10.))
                             .line_height(px(12.5))
                             .font_weight(FontWeight::BOLD)
-                            .child("RESHOT · SETTINGS"),
+                            .child(tr("RESHOT · SETTINGS")),
                     )
                     .child(
                         div()
@@ -824,12 +830,12 @@ impl Render for SettingsWindow {
                             .opacity(0.75)
                             .child(self.status.clone()),
                     )
-                    .child(button("settings-ok", "OK", false, false).on_click(cx.listener(|this, _, window, cx| {
+                    .child(button("settings-ok", tr("OK"), false, false).on_click(cx.listener(|this, _, window, cx| {
                         this.save(cx);
                         this.close(window);
                     })))
-                    .child(button("settings-cancel", "Cancel", false, false).on_click(cx.listener(|this, _, window, _| this.close(window))))
-                    .child(button("settings-apply", "Apply", false, !dirty).on_click(cx.listener(|this, _, _, cx| {
+                    .child(button("settings-cancel", tr("Cancel"), false, false).on_click(cx.listener(|this, _, window, _| this.close(window))))
+                    .child(button("settings-apply", tr("Apply"), false, !dirty).on_click(cx.listener(|this, _, _, cx| {
                         if this.dirty() {
                             this.save(cx);
                         }

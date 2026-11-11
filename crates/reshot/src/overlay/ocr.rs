@@ -3,7 +3,8 @@
 //! copying joins them with spaces and breaks lines with newlines.
 
 use reshot_core::skia::{IRect, Point, Rect};
-use reshot_ocr::{OcrLanguage, OcrLine};
+use reshot_core::i18n::{self, tr, trf};
+use reshot_ocr::{OcrLine, OcrMode};
 
 #[derive(Clone, Debug)]
 pub struct Word {
@@ -15,9 +16,14 @@ pub struct Word {
 
 pub struct OcrState {
     pub active: bool,
+    /// Until the first recognizers report.
     pub busy: bool,
+    /// The first result is up; the other installed recognizers are still reading.
+    pub refining: bool,
     pub selecting: bool,
-    pub lang: OcrLanguage,
+    pub lang: OcrMode,
+    /// Which run the incoming results belong to; a newer run makes older results stale.
+    pub run: u64,
     pub hint: Option<String>,
     pub words: Vec<Word>,
     anchor: Option<usize>,
@@ -29,8 +35,10 @@ impl Default for OcrState {
         Self {
             active: false,
             busy: false,
+            refining: false,
             selecting: false,
-            lang: OcrLanguage::Auto,
+            lang: OcrMode::Auto,
+            run: 0,
             hint: None,
             words: Vec::new(),
             anchor: None,
@@ -40,45 +48,56 @@ impl Default for OcrState {
 }
 
 impl OcrState {
-    pub fn mode_label(&self) -> &'static str {
-        match self.lang {
-            OcrLanguage::Ru => "RU",
-            OcrLanguage::En => "EN",
-            OcrLanguage::Auto => "AUTO (RU+EN)",
+    pub fn mode_label(&self) -> String {
+        match &self.lang {
+            OcrMode::Auto => "AUTO".into(),
+            // A recognizer is shown by the language's own name where the interface knows it.
+            OcrMode::Language(tag) => i18n::match_tag(tag).map_or_else(|| tag.clone(), |i| i18n::LANGUAGES[i].native.into()),
         }
     }
 
-    /// Leaves OCR mode, keeping the chosen language.
+    /// Leaves OCR mode, keeping the chosen language. Results still on their way are dropped.
     pub fn reset(&mut self) {
-        *self = Self { lang: self.lang, ..Default::default() };
+        *self = Self { lang: self.lang.clone(), run: self.run + 1, ..Default::default() };
     }
 
-    pub fn cycle_language(&mut self) {
-        self.lang = match self.lang {
-            OcrLanguage::Auto => OcrLanguage::Ru,
-            OcrLanguage::Ru => OcrLanguage::En,
-            OcrLanguage::En => OcrLanguage::Auto,
+    /// AUTO, then each installed recognizer on its own, then AUTO again.
+    pub fn cycle_language(&mut self, installed: &[String]) {
+        let next = match &self.lang {
+            OcrMode::Auto => 0,
+            OcrMode::Language(tag) => installed.iter().position(|t| t == tag).map_or(installed.len(), |i| i + 1),
         };
+        self.lang = installed.get(next).map_or(OcrMode::Auto, |tag| OcrMode::Language(tag.clone()));
     }
 
-    pub fn begin(&mut self) {
+    /// Starts a run and returns its id.
+    pub fn begin(&mut self) -> u64 {
+        self.run += 1;
         self.active = true;
         self.busy = true;
+        self.refining = false;
         self.selecting = false;
         self.words.clear();
         self.anchor = None;
         self.focus = None;
-        self.hint = Some(format!("Recognising ({})…", self.mode_label()));
+        self.hint = Some(trf("Recognising ({mode})…", &[("mode", &self.mode_label())]));
+        self.run
     }
 
-    /// Takes the engine's lines; their rects are relative to `region`.
-    pub fn finish(&mut self, lines: Vec<OcrLine>, region: IRect) {
+    /// Takes a run's lines, their rects relative to `region`. A first, early result is
+    /// followed by a `last` one once every recognizer has read; when that adds nothing the
+    /// words and any selection on them stay as they are.
+    pub fn finish(&mut self, run: u64, lines: Vec<OcrLine>, region: IRect, last: bool) {
+        if run != self.run {
+            return;
+        }
         self.busy = false;
+        self.refining = !last;
         if !self.active {
             return;
         }
         let (dx, dy) = (region.left as f32, region.top as f32);
-        self.words = lines
+        let words: Vec<Word> = lines
             .into_iter()
             .enumerate()
             .flat_map(|(line, l)| {
@@ -89,14 +108,27 @@ impl OcrState {
                 })
             })
             .collect();
-        self.hint = Some(if self.words.is_empty() {
-            format!("No text found ({}). Right-click the tool to switch mode.", self.mode_label())
+        let same = words.len() == self.words.len()
+            && words.iter().zip(&self.words).all(|(a, b)| a.text == b.text && a.rect == b.rect && a.line == b.line);
+        if !same {
+            self.words = words;
+            self.anchor = None;
+            self.focus = None;
+            self.selecting = false;
+        }
+        let mode = self.mode_label();
+        let mut hint = if self.words.is_empty() && last {
+            trf("No text found ({mode}). Right-click the tool to switch language.", &[("mode", &mode)])
         } else {
-            format!(
-                "OCR {} · drag to select · Ctrl+C copy · Ctrl+A all · right-click tool: mode · Esc exit",
-                self.mode_label()
+            trf(
+                "OCR {mode} · drag to select · Ctrl+C copy · Ctrl+A all · right-click tool: language · Esc exit",
+                &[("mode", &mode)],
             )
-        });
+        };
+        if self.refining {
+            hint = format!("{hint} · {}", tr("reading the other installed languages…"));
+        }
+        self.hint = Some(hint);
     }
 
     /// Nearest word to a point by distance to its box, for forgiving hit-testing.
@@ -182,16 +214,16 @@ impl OcrState {
         out
     }
 
-    /// The selection if there is one, else everything; with a description of which.
-    pub fn text_to_copy(&self) -> Option<(String, &'static str)> {
+    /// The selection if there is one, else everything; `true` when it is everything.
+    pub fn text_to_copy(&self) -> Option<(String, bool)> {
         if self.words.is_empty() {
             return None;
         }
-        let (text, scope) = match self.selected_range() {
-            Some((a, b)) => (self.join(a, b), "selection"),
-            None => (self.join(0, self.words.len() - 1), "all text"),
+        let (text, all) = match self.selected_range() {
+            Some((a, b)) => (self.join(a, b), false),
+            None => (self.join(0, self.words.len() - 1), true),
         };
-        (!text.is_empty()).then_some((text, scope))
+        (!text.is_empty()).then_some((text, all))
     }
 }
 
@@ -201,21 +233,22 @@ mod tests {
     use reshot_ocr::{OcrRect, OcrWord};
 
     fn state() -> OcrState {
-        let w = |t: &str, l: f32| OcrWord { text: t.into(), rect: OcrRect { left: l, top: 0.0, right: l + 10.0, bottom: 10.0 } };
         let mut s = OcrState::default();
-        s.begin();
-        s.finish(
-            vec![OcrLine { words: vec![w("hello", 0.0), w("world", 20.0)] }, OcrLine { words: vec![w("next", 0.0)] }],
-            IRect::from_xywh(100, 100, 50, 50),
-        );
+        let run = s.begin();
+        s.finish(run, lines(), IRect::from_xywh(100, 100, 50, 50), true);
         s
+    }
+
+    fn lines() -> Vec<OcrLine> {
+        let w = |t: &str, l: f32| OcrWord { text: t.into(), rect: OcrRect { left: l, top: 0.0, right: l + 10.0, bottom: 10.0 } };
+        vec![OcrLine { words: vec![w("hello", 0.0), w("world", 20.0)] }, OcrLine { words: vec![w("next", 0.0)] }]
     }
 
     #[test]
     fn rects_are_moved_into_frame_space_and_lines_join_with_newlines() {
         let s = state();
         assert_eq!(s.words[1].rect.left, 120.0);
-        assert_eq!(s.text_to_copy().unwrap(), ("hello world\nnext".to_string(), "all text"));
+        assert_eq!(s.text_to_copy().unwrap(), ("hello world\nnext".to_string(), true));
     }
 
     #[test]
@@ -245,12 +278,47 @@ mod tests {
     }
 
     #[test]
-    fn language_cycles_auto_ru_en() {
+    fn language_cycles_auto_then_each_installed_recognizer() {
+        let installed = ["en-US".to_string(), "ru".to_string()];
         let mut s = OcrState::default();
-        s.cycle_language();
-        assert_eq!(s.lang, OcrLanguage::Ru);
-        s.cycle_language();
-        s.cycle_language();
-        assert_eq!(s.lang, OcrLanguage::Auto);
+        s.cycle_language(&installed);
+        assert_eq!(s.lang, OcrMode::Language("en-US".into()));
+        s.cycle_language(&installed);
+        assert_eq!(s.lang, OcrMode::Language("ru".into()));
+        s.cycle_language(&installed);
+        assert_eq!(s.lang, OcrMode::Auto);
+        // A recognizer uninstalled meanwhile leads back to AUTO.
+        s.lang = OcrMode::Language("de-DE".into());
+        s.cycle_language(&installed);
+        assert_eq!(s.lang, OcrMode::Auto);
+    }
+
+    #[test]
+    fn a_final_result_that_adds_nothing_keeps_the_selection() {
+        let mut s = OcrState::default();
+        let run = s.begin();
+        let region = IRect::from_xywh(100, 100, 50, 50);
+        s.finish(run, lines(), region, false);
+        assert!(s.refining);
+        s.select_all();
+        s.finish(run, lines(), region, true);
+        assert!(!s.refining);
+        assert_eq!(s.selected_range(), Some((0, 2)));
+        // A different final reading replaces the words and drops the selection.
+        s.finish(run, lines()[..1].to_vec(), region, true);
+        assert_eq!(s.words.len(), 2);
+        assert_eq!(s.selected_range(), None);
+    }
+
+    #[test]
+    fn results_of_an_older_run_are_ignored() {
+        let mut s = OcrState::default();
+        let old = s.begin();
+        let new = s.begin();
+        assert_ne!(old, new);
+        s.finish(old, lines(), IRect::from_xywh(0, 0, 50, 50), true);
+        assert!(s.words.is_empty() && s.busy);
+        s.finish(new, lines(), IRect::from_xywh(0, 0, 50, 50), true);
+        assert_eq!(s.words.len(), 3);
     }
 }
