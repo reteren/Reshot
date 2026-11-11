@@ -165,6 +165,7 @@ impl Render for Overlay {
         let (fw, fh) = (self.editor.width() as f32, self.editor.height() as f32);
         let (lw, lh) = (fw / s, fh / s);
 
+        self.flush_pending(cx);
         self.surface.update(&mut self.editor);
         let surface = self.surface.prepare(s);
 

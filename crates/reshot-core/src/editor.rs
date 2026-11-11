@@ -374,6 +374,21 @@ impl Editor {
         }
     }
 
+    /// Every pointer point since the last frame. A soft stroke takes them in one batch; the
+    /// other gestures only need where the pointer is now.
+    pub fn extend_all(&mut self, points: &[Point]) {
+        let Some(&last) = points.last() else { return };
+        if let Some(r) = self.region.as_mut()
+            && !r.rect_mode
+            && let Some(stroke) = r.stroke.as_mut()
+        {
+            r.generation += 1;
+            r.damage = stroke.add_all(points);
+            return;
+        }
+        self.extend(last);
+    }
+
     // ---- Shapes and text ---------------------------------------------------------------
 
     pub fn begin_shape(&mut self, tool: DrawTool, p: Point, clip: Option<Path>) {

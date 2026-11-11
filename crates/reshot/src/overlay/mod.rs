@@ -83,6 +83,10 @@ pub struct FlyoutState {
 }
 
 pub struct Overlay {
+    /// Pointer points of the live stroke that arrived since the last frame. A 1000 Hz mouse
+    /// sends a move every millisecond; drawing each one as it came starved the frames, so the
+    /// stroke lagged behind the pointer. The frame draws them in one batch.
+    pending: Vec<SkPoint>,
     focus: FocusHandle,
     frame_image: Arc<RenderImage>,
     editor: Editor,
@@ -201,6 +205,7 @@ impl Overlay {
                         lines_sub: DrawTool::Arrow,
                         eraser_sub: DrawTool::Eraser,
                         effects_sub: DrawTool::Pixelize,
+                        pending: Vec::new(),
                         drag: Drag::None,
                         drag_start: SkPoint::default(),
                         ratio: RatioLock::default(),
@@ -309,6 +314,15 @@ impl Overlay {
         }
     }
 
+    /// Draws the stroke points queued since the last frame.
+    pub(crate) fn flush_pending(&mut self, cx: &mut Context<Self>) {
+        if self.pending.is_empty() {
+            return;
+        }
+        let points = std::mem::take(&mut self.pending);
+        self.with_live(cx, |this| this.editor.extend_all(&points));
+    }
+
     /// Repaints whatever the live gesture touches before and after `f`, plus anything `f`
     /// committed.
     fn with_live<R>(&mut self, cx: &mut Context<Self>, f: impl FnOnce(&mut Self) -> R) -> R {
@@ -352,6 +366,7 @@ impl Overlay {
     // ---- Tools ----------------------------------------------------------------------------
 
     fn finish_editing(&mut self, cx: &mut Context<Self>) {
+        self.flush_pending(cx);
         self.with_live(cx, |this| {
             this.editor.commit_text();
             this.editor.finish_gesture();
@@ -388,6 +403,17 @@ impl Overlay {
         self.panel.load(self.editor.settings(tool));
         log::info!("Draw sub-tool → {tool:?}.");
         cx.notify();
+        if tool.is_effect() {
+            // The blurred or pixelated copy of the whole frame takes about 50 ms to build. Built
+            // here, once the switch has been drawn, it is ready before the first stroke instead
+            // of stalling that stroke's first frame.
+            cx.spawn(async move |this, cx| {
+                let _ = this.update(cx, |this, _| {
+                    this.editor.effect_source(tool);
+                });
+            })
+            .detach();
+        }
     }
 
     pub(crate) fn set_shape(&mut self, kind: ShapeKind, cx: &mut Context<Self>) {
@@ -544,7 +570,8 @@ impl Overlay {
         if self.mode != Mode::Select {
             self.cursor = Some(p);
             if self.editor.is_drawing() {
-                self.with_live(cx, |this| this.editor.extend(p));
+                self.pending.push(p);
+                cx.notify();
             } else {
                 cx.notify();
             }
@@ -596,6 +623,7 @@ impl Overlay {
             return;
         }
         if self.editor.is_drawing() {
+            self.flush_pending(cx);
             self.with_live(cx, |this| this.editor.end_gesture());
             return;
         }
@@ -816,6 +844,7 @@ impl Overlay {
     fn apply_ctrl_a(&mut self, cx: &mut Context<Self>) {
         // Replacing the selection under a live stroke would leave it clipped to a rectangle
         // that no longer exists, so the stroke lands first.
+        self.flush_pending(cx);
         self.with_live(cx, |this| this.editor.finish_gesture());
         self.ctrl_a = if self.ctrl_a == CtrlA::Primary { CtrlA::All } else { CtrlA::Primary };
         let bounds = if self.ctrl_a == CtrlA::All { self.frame_rect() } else { self.primary_monitor() };

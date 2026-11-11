@@ -18,6 +18,14 @@ project adheres to [Semantic Versioning](https://semver.org/).
   with their result shown at once, then the rest, which refine it a moment later. A right
   click on the OCR tab now cycles AUTO and each installed language.
 
+### Fixed
+
+- Blur, pixelate and the erasers no longer lag behind the pointer with a wide brush. A
+  1000 Hz mouse sent a point every millisecond and each was drawn on arrival, and a quick
+  reversal was cut into about 95 overlapping discs; points now are drawn once per frame,
+  close points and needlessly short pieces are skipped in proportion to the brush, and the
+  blurred copy of the frame is ready when the tool is picked instead of on the first stroke.
+
 ### Changed
 
 - With only the Russian and English packs installed, AUTO reads exactly as before,

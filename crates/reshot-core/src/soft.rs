@@ -28,8 +28,20 @@ use crate::document;
 /// Input points closer than this to the previous one are ignored: sub-pixel jitter would only
 /// bend the curve's tangents.
 const MIN_INPUT_STEP: f32 = 0.75;
+/// A wide brush also ignores points closer than this share of its radius. Every point redraws
+/// a provisional tail and at least one capsule about a diameter square, so a 1000 Hz mouse
+/// (a point every 1-2 px) made a 150 px blur cost three times the stroke's own duration, and
+/// the overlay fell behind the pointer. At a tenth of the radius the smoothed curve between
+/// the points kept stays inside the disc that covers them, so nothing visible is lost.
+const MIN_INPUT_STEP_OF_RADIUS: f32 = 0.1;
 /// Max direction change between neighbouring straight pieces of a smoothed stroke.
 const MAX_TURN_PER_PIECE: f32 = 3.0 * std::f32::consts::PI / 180.0;
+/// Shortest piece a stroke is cut into, as a share of its radius. Each piece costs a full
+/// disc of pixels however short it is, and a scrubbing hand reverses direction all the time:
+/// at 3° per piece one reversal made about 95 overlapping discs, which is what made a wide
+/// blur or eraser lag behind the pointer. Pieces this short all lie inside the disc that
+/// covers the turn, so the curve still reads as round.
+const MIN_PIECE_OF_RADIUS: f32 = 0.08;
 /// Extra room the coverage grows by, so a stroke reallocates a handful of times, not per move.
 const MARGIN: i32 = 128;
 
@@ -60,9 +72,10 @@ pub fn shape_blur_sigma(thickness: f32, hardness: f32) -> f32 {
 }
 
 /// Samples (after `p1`, ending exactly at `p2`) of the centripetal Catmull-Rom curve through
-/// `p0..p3`, dense enough that neighbouring pieces turn by at most 3°. Centripetal
-/// parametrisation never loops or overshoots on sharp turns.
-pub fn smooth_samples(p0: Point, p1: Point, p2: Point, p3: Point) -> Vec<Point> {
+/// `p0..p3`, dense enough that neighbouring pieces turn by at most 3°, but no piece much
+/// shorter than `min_piece`. Centripetal parametrisation never loops or overshoots on sharp
+/// turns.
+pub fn smooth_samples(p0: Point, p1: Point, p2: Point, p3: Point, min_piece: f32) -> Vec<Point> {
     let chord = (p2 - p1).length();
     if chord == 0.0 {
         return vec![p2];
@@ -70,7 +83,12 @@ pub fn smooth_samples(p0: Point, p1: Point, p2: Point, p3: Point) -> Vec<Point> 
     let (inv, outv) = (p2 - p0, p3 - p1);
     let turn = (inv.x * outv.y - inv.y * outv.x).atan2(inv.x * outv.x + inv.y * outv.y).abs();
     // The tangent can swing past the chord on both ends, hence the factor 2.
-    let count = ((2.0 * turn / MAX_TURN_PER_PIECE).ceil()).max((chord / 64.0).ceil()).clamp(1.0, 256.0) as usize;
+    let mut count = ((2.0 * turn / MAX_TURN_PER_PIECE).ceil()).max((chord / 64.0).ceil()).clamp(1.0, 256.0);
+    if min_piece > 0.0 && count.is_finite() {
+        // The curve is at most about chord * (1 + turn) long.
+        count = count.min((chord * (1.0 + turn) / min_piece).ceil().max(1.0));
+    }
+    let count = count as usize;
     if count == 1 || turn.is_nan() || turn <= 1e-4 {
         return vec![p2];
     }
@@ -148,6 +166,10 @@ pub struct SoftStroke {
     radius: f32,
     hardness: f32,
     pass_window: f32,
+    /// Input points closer than this to the last one kept are skipped.
+    min_step: f32,
+    /// Shortest piece the smoothed curve is cut into.
+    min_piece: f32,
     /// Strength (0..1) the shown value is scaled by in the bitmap, as a lookup table.
     scale: [u8; 256],
     /// Where the coverage sits in the frame; empty until the first piece.
@@ -175,6 +197,8 @@ impl SoftStroke {
             // Neighbouring pieces touch a pixel again within about a radius of path; a return
             // from further away is another pass (fully composited after about 4.5 radii).
             pass_window: (radius * 1.5).max(4.0),
+            min_step: (radius * MIN_INPUT_STEP_OF_RADIUS).max(MIN_INPUT_STEP),
+            min_piece: radius * MIN_PIECE_OF_RADIUS,
             scale: std::array::from_fn(|v| (v as f32 * strength).round() as u8),
             at: IRect::new_empty(),
             planes: Planes::default(),
@@ -192,6 +216,43 @@ impl SoftStroke {
         s
     }
 
+    /// Adds every pointer point that arrived since the last frame, redrawing the provisional
+    /// tail once for all of them instead of once per point. Same result as adding them one by
+    /// one; returns the frame area whose coverage changed.
+    pub fn add_all(&mut self, points: &[Point]) -> Option<IRect> {
+        let mut damage = None;
+        let mut moved = false;
+        for &p in points {
+            if !p.x.is_finite() || !p.y.is_finite() {
+                continue;
+            }
+            let Some(&last) = self.inputs.last() else {
+                damage = join(damage, self.add(p));
+                continue;
+            };
+            if (p - last).length() < self.min_step {
+                continue;
+            }
+            if !moved {
+                damage = join(damage, self.restore_tail());
+                moved = true;
+            }
+            self.inputs.push(p);
+            let n = self.inputs.len();
+            if n >= 3 {
+                let i = &self.inputs;
+                let p0 = if n >= 4 { i[n - 4] } else { i[n - 3] };
+                let (from, samples) = (i[n - 3], smooth_samples(p0, i[n - 3], i[n - 2], i[n - 1], self.min_piece));
+                damage = join(damage, self.draw_through(from, &samples));
+                self.inputs.drain(..n - 3);
+            }
+        }
+        if moved {
+            damage = join(damage, self.draw_tail());
+        }
+        damage
+    }
+
     /// Adds a pointer point. Returns the frame area whose coverage changed: the redrawn tail,
     /// the piece made final and the new tail.
     pub fn add(&mut self, p: Point) -> Option<IRect> {
@@ -204,7 +265,7 @@ impl SoftStroke {
             self.drawn = join(self.drawn, d);
             return d;
         };
-        if (p - last).length() < MIN_INPUT_STEP {
+        if (p - last).length() < self.min_step {
             return None;
         }
         let mut damage = self.restore_tail();
@@ -214,7 +275,7 @@ impl SoftStroke {
             // The piece up to the second-last point is final now that its next point is known.
             let i = &self.inputs;
             let p0 = if n >= 4 { i[n - 4] } else { i[n - 3] };
-            let (from, samples) = (i[n - 3], smooth_samples(p0, i[n - 3], i[n - 2], i[n - 1]));
+            let (from, samples) = (i[n - 3], smooth_samples(p0, i[n - 3], i[n - 2], i[n - 1], self.min_piece));
             damage = join(damage, self.draw_through(from, &samples));
             self.inputs.drain(..n - 3);
         }
@@ -241,7 +302,7 @@ impl SoftStroke {
         }
         let (p1, p2) = (self.inputs[n - 2], self.inputs[n - 1]);
         let p0 = if n >= 3 { self.inputs[n - 3] } else { p1 };
-        let samples = smooth_samples(p0, p1, p2, p2);
+        let samples = smooth_samples(p0, p1, p2, p2, self.min_piece);
         // Skia's join skips empty rects, so the bounds of the points are taken by hand.
         let mut bounds = Rect::from_ltrb(p1.x, p1.y, p1.x, p1.y);
         for s in &samples {
@@ -520,12 +581,84 @@ mod tests {
             Point::new(50.0, 0.0),
             Point::new(50.0, 50.0),
             Point::new(50.0, 100.0),
+            0.0,
         );
         assert!(samples.len() > 10, "{} pieces", samples.len());
         assert_eq!(*samples.last().unwrap(), Point::new(50.0, 50.0));
         // A straight run needs no extra pieces.
-        let straight = smooth_samples(Point::new(0.0, 0.0), Point::new(10.0, 0.0), Point::new(20.0, 0.0), Point::new(30.0, 0.0));
+        let straight = smooth_samples(Point::new(0.0, 0.0), Point::new(10.0, 0.0), Point::new(20.0, 0.0), Point::new(30.0, 0.0), 0.0);
         assert_eq!(straight, vec![Point::new(20.0, 0.0)]);
+    }
+
+    #[test]
+    fn coarser_pieces_leave_a_scrubbed_stroke_looking_the_same() {
+        // A hand scrubbing back and forth with a wide soft brush, a point every 2 px.
+        let scrub = |min_piece: Option<f32>| {
+            let mut s = SoftStroke::new((600, 400), Point::new(100.0, 200.0), 60.0, 0.3, 1.0);
+            if let Some(m) = min_piece {
+                s.min_piece = m;
+                s.min_step = MIN_INPUT_STEP;
+            }
+            for i in 1..600 {
+                let t = i as f32 * 2.0;
+                let x = 100.0 + (t % 160.0 - 80.0).abs() * 2.0 + t * 0.4;
+                s.add(Point::new(x, 200.0 + (t / 25.0).sin() * 40.0));
+            }
+            s
+        };
+        let (old, new) = (scrub(Some(0.0)), scrub(None));
+        let (mut worst, mut sum, mut n) = (0i32, 0i64, 0i64);
+        for y in 0..400 {
+            for x in 0..600 {
+                let d = (value(&old, x, y) as i32 - value(&new, x, y) as i32).abs();
+                worst = worst.max(d);
+                sum += d as i64;
+                n += 1;
+            }
+        }
+        let mean = sum as f64 / n as f64;
+        assert!(worst <= 16 && mean < 0.25, "worst {worst}, mean {mean:.3}");
+    }
+
+    #[test]
+    fn adding_a_frame_of_points_at_once_draws_the_same_stroke() {
+        let points: Vec<Point> = (1..200).map(|i| Point::new(100.0 + i as f32 * 2.0, 200.0 + (i as f32 / 9.0).sin() * 50.0)).collect();
+        let mut one = SoftStroke::new((700, 400), Point::new(100.0, 200.0), 30.0, 0.4, 1.0);
+        for p in &points {
+            one.add(*p);
+        }
+        let mut batched = SoftStroke::new((700, 400), Point::new(100.0, 200.0), 30.0, 0.4, 1.0);
+        for chunk in points.chunks(7) {
+            batched.add_all(chunk);
+        }
+        // The buffers may be reserved a little differently; the strokes in them may not differ.
+        let common = IRect::intersect(&one.coverage().unwrap().0, &batched.coverage().unwrap().0).unwrap();
+        assert!(common.width() > 500);
+        for y in common.top..common.bottom {
+            for x in common.left..common.right {
+                assert_eq!(value(&one, x, y), value(&batched, x, y), "at {x},{y}");
+            }
+        }
+    }
+
+    #[test]
+    fn a_short_sharp_turn_is_not_cut_finer_than_the_brush_can_show() {
+        let (p0, p1, p2, p3) = (Point::new(0.0, 0.0), Point::new(6.0, 0.0), Point::new(1.0, 1.0), Point::new(-5.0, 1.0));
+        let fine = smooth_samples(p0, p1, p2, p3, 0.0);
+        let wide = smooth_samples(p0, p1, p2, p3, 6.0);
+        assert!(fine.len() > 50, "{} pieces", fine.len());
+        assert!(wide.len() <= 3, "{} pieces", wide.len());
+        assert_eq!(*wide.last().unwrap(), p2);
+    }
+
+    #[test]
+    fn a_wide_brush_skips_points_closer_than_a_tenth_of_its_radius() {
+        let mut wide = SoftStroke::new((400, 400), Point::new(100.0, 100.0), 50.0, 0.5, 1.0);
+        assert!(wide.add(Point::new(104.0, 100.0)).is_none());
+        assert!(wide.add(Point::new(106.0, 100.0)).is_some());
+        // A thin one still follows every pixel of movement.
+        let mut thin = SoftStroke::new((400, 400), Point::new(100.0, 100.0), 3.0, 0.5, 1.0);
+        assert!(thin.add(Point::new(101.0, 100.0)).is_some());
     }
 
     #[test]
