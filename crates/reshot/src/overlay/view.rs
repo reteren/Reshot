@@ -4,7 +4,7 @@
 
 use gpui::{
     AnyElement, Bounds, Context, CursorStyle, DispatchPhase, ElementInputHandler, InteractiveElement, IntoElement, KeyDownEvent,
-    ModifiersChangedEvent, MouseButton, MouseDownEvent, MouseMoveEvent, MouseUpEvent, ParentElement, Pixels, Render,
+    KeyUpEvent, ModifiersChangedEvent, MouseButton, ScrollWheelEvent, MouseDownEvent, MouseMoveEvent, MouseUpEvent, ParentElement, Pixels, Render,
     Styled, Window, canvas, div, img, point, px, rgb, rgba, size,
 };
 use reshot_core::editor::DrawTool;
@@ -235,6 +235,8 @@ impl Render for Overlay {
             .cursor(self.cursor_style())
             .track_focus(&self.focus)
             .on_key_down(cx.listener(|this, e: &KeyDownEvent, window, cx| this.on_key(e, window, cx)))
+            .on_key_up(cx.listener(|this, e: &KeyUpEvent, _, cx| this.adjust_key_up(&e.keystroke.key, cx)))
+            .on_scroll_wheel(cx.listener(|this, e: &ScrollWheelEvent, window, cx| this.adjust_wheel(e, window, cx)))
             .on_modifiers_changed(cx.listener(|this, e: &ModifiersChangedEvent, _, cx| this.on_modifiers(e, cx)))
             .on_mouse_down(MouseButton::Left, cx.listener(|this, e: &MouseDownEvent, window, cx| this.on_left_down(e, window, cx)))
             .on_mouse_down(MouseButton::Right, cx.listener(|this, e: &MouseDownEvent, _, cx| this.on_right_down(e, cx)))
@@ -274,6 +276,7 @@ impl Render for Overlay {
             root = root.children(self.brush_ring());
         }
         root = root.children(self.eyedropper_preview(lw, lh));
+        root = root.children(self.adjust_readout(lw, lh));
         if let Some(h) = &self.ocr.hint {
             root = root.child(Self::banner(h.clone(), theme::panel_bg(), 24.0));
         }

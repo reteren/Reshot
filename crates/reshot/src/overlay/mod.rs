@@ -10,6 +10,7 @@
 //! elements occlude the canvas, so the canvas never sees those clicks), context modifiers,
 //! then the active tool.
 
+mod adjust;
 mod chrome;
 mod frame_image;
 mod ocr;
@@ -87,6 +88,8 @@ pub struct Overlay {
     /// sends a move every millisecond; drawing each one as it came starved the frames, so the
     /// stroke lagged behind the pointer. The frame draws them in one batch.
     pending: Vec<SkPoint>,
+    /// S, F or R held for a wheel adjustment, with whether the value readout is up.
+    adjust: Option<adjust::Adjust>,
     focus: FocusHandle,
     frame_image: Arc<RenderImage>,
     editor: Editor,
@@ -206,6 +209,7 @@ impl Overlay {
                         eraser_sub: DrawTool::Eraser,
                         effects_sub: DrawTool::Pixelize,
                         pending: Vec::new(),
+                        adjust: None,
                         drag: Drag::None,
                         drag_start: SkPoint::default(),
                         ratio: RatioLock::default(),
@@ -755,6 +759,10 @@ impl Overlay {
                 "escape" => return self.exit_ocr(cx),
                 _ => {}
             }
+        }
+
+        if !ctrl && !k.modifiers.alt && self.adjust_key_down(key, cx) {
+            return;
         }
 
         if !ctrl && let Some(slot) = digit_slot(key) {

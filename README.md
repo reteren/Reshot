@@ -14,7 +14,7 @@ what it can do:
 
 selection: rectangle, ellipse, triangle, lasso, polygon, several at once with ctrl, a selection inside another one cuts a hole in it
 
-drawing: brush, shapes, lines and arrows, text in any installed font, blur and pixelation, three erasers, eyedropper and a full colour picker, 32 steps of undo. drag text to move it; double-click it with the text tool to edit it
+drawing: brush, shapes, lines and arrows, text in any installed font, blur and pixelation, three erasers, eyedropper and a full colour picker, 32 steps of undo. hold s, f or r and turn the wheel to change size, opacity or hardness on the spot. drag text to move it; double-click it with the text tool to edit it
 
 text: recognised words can be selected right over the frozen screen and copied. it works offline through the windows engine in any language windows has an ocr pack for. auto mode reads the interface language and english first and shows them right away, then checks the other installed languages
 

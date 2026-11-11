@@ -33,7 +33,7 @@ const PALETTE: [u32; 16] = [
 const RESET_COLOR: u32 = 0xFF3B30;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum Slider {
+pub(crate) enum Slider {
     Size,
     Opacity,
     Hardness,
@@ -367,7 +367,7 @@ impl PanelState {
         nearest.unwrap_or(self.hex.text.len()).min(self.hex.text.len())
     }
 
-    fn slider_value(&self, s: Slider, b: &BrushSettings) -> (f32, f32, f32) {
+    pub(crate) fn slider_value(&self, s: Slider, b: &BrushSettings) -> (f32, f32, f32) {
         match s {
             Slider::Size => (b.thickness, 1.0, 200.0),
             Slider::Opacity => (b.opacity * 100.0, 0.0, 100.0),
@@ -376,7 +376,7 @@ impl PanelState {
     }
 }
 
-fn set_slider(editor: &mut Editor, tool: DrawTool, s: Slider, v: f32) {
+pub(crate) fn set_slider(editor: &mut Editor, tool: DrawTool, s: Slider, v: f32) {
     let b = editor.settings_mut(tool);
     match s {
         Slider::Size => b.thickness = v.round().clamp(1.0, 200.0),
@@ -518,7 +518,14 @@ impl Overlay {
             .flex()
             .items_center()
             .mb(px(8.))
-            .child(label(name).w(px(88.)))
+            .child(
+                // The label tells about the key that changes the value from anywhere.
+                label(name).id(ElementId::Name(format!("slider-label-{name}").into())).w(px(88.)).tooltip(theme::tooltip(match s {
+                    Slider::Size => tr("Hold S and turn the wheel to change this anywhere on the image"),
+                    Slider::Opacity => tr("Hold F and turn the wheel to change this anywhere on the image"),
+                    Slider::Hardness => tr("Hold R and turn the wheel to change this anywhere on the image"),
+                })),
+            )
             .child(track)
             .child(label(value).w(px(40.)).flex().justify_end())
     }

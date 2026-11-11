@@ -17,6 +17,9 @@ project adheres to [Semantic Versioning](https://semver.org/).
   and English. AUTO runs every installed pack: the interface language and English first,
   with their result shown at once, then the rest, which refine it a moment later. A right
   click on the OCR tab now cycles AUTO and each installed language.
+- Hold S, F or R and turn the wheel to change the tool's size, opacity (strength for blur
+  and pixelate) or hardness from anywhere on the image; a small readout under the pointer
+  shows the value. The keys are listed in Settings ▸ Info and on the panel sliders' tooltips.
 
 ### Fixed
 

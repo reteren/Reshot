@@ -625,6 +625,9 @@ fn binds() -> Vec<(&'static str, Vec<Bind>)> {
         vec![
             (vec![tr("LMB")], tr("Draw with the current tool (inside the selection)")),
             (vec!["Shift"], tr("Open / close the tool settings panel")),
+            (vec!["S", tr("Wheel")], tr("Brush size, with its value shown under the pointer")),
+            (vec!["F", tr("Wheel")], tr("Opacity, or strength for blur and pixelate")),
+            (vec!["R", tr("Wheel")], tr("Hardness")),
             (vec![tr("LMB")], tr("On the dotted strip: the same panel")),
             (vec![tr("RMB")], tr("Hold on the image: colour picker, release to take the colour")),
             (vec![tr("LMB")], tr("Eyedropper button: stays armed until you right-click a pixel")),
