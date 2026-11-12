@@ -699,8 +699,6 @@ impl Render for SettingsWindow {
             let active = self.tab == tab;
             let id: SharedString = format!("tab-{}", tab as usize).into();
             let label = text(12., LINE)
-                .opacity(if active { 1.0 } else { 0.5 })
-                .when(!active, |d| d.group_hover(id.clone(), |s| s.opacity(0.8)))
                 .child(tab.label());
             let el = div().flex_grow().px(px(17.)).pt(px(if active { 7. } else { 5. })).pb(px(5.)).child(label);
             let (light, dark) = (theme::tab_light(), theme::tab_dark());

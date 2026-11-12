@@ -18,9 +18,9 @@ use std::collections::HashMap;
 /// The face the webview bundled through @fontsource; embedded by `assets::register_fonts`.
 pub const FONT: &str = "Reshot Roboto";
 
-/// Chromium's placeholder grey, what the empty audio-hotkey field showed.
+/// The empty audio-hotkey field's text: white like the rest, the backdrop is translucent.
 pub fn placeholder() -> Rgba {
-    rgb(0x757575)
+    theme::text()
 }
 
 /// Line box of the shell's `line-height: 125%` at 12 px.
@@ -167,9 +167,9 @@ pub fn para(s: impl Into<SharedString>) -> Div {
     wrapped(s, 12., PARA)
 }
 
-/// `.hint`: 11 px at 55 % opacity, still on a 150 % line.
+/// `.hint`: 11 px in full white (it sits on a translucent backdrop), on a 150 % line.
 pub fn hint(s: impl Into<SharedString>) -> Div {
-    wrapped(s, 11., 16.5).opacity(0.55)
+    wrapped(s, 11., 16.5)
 }
 
 /// Four 1 px edges, each in its own colour (`None` leaves that side bare). Top and left are
