@@ -3,6 +3,13 @@
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and this
 project adheres to [Semantic Versioning](https://semver.org/).
 
+## [1.4.2] - Unreleased (test build)
+
+### Changed
+
+- The settings window shows its hints, the inactive tabs and the empty audio-hotkey field
+  in full white; dimmed, they were unreadable over the translucent backdrop.
+
 ## [1.4.1] - Unreleased (test build)
 
 ### Added
